@@ -23,6 +23,8 @@ class Converter:
         input_folder: str,
         output_path: str,
         nuclei_channel: int = 0,
+        cell_channels: list[int] | None = None,
+        merge_method: str = 'none',
     ) -> None:
         """Initialize converter.
 
@@ -34,10 +36,16 @@ class Converter:
             Output H5 file path
         nuclei_channel : int
             Channel index for nuclei
+        cell_channels : list[int] | None
+            Channel indices for cell channels to merge. If None and merge_method != 'none', uses all channels except nuclei_channel.
+        merge_method : str
+            Merge method: 'add', 'multiply', or 'none'
         """
         self.input_folder = Path(input_folder).resolve()
         self.output_path = Path(output_path).resolve()
         self.nuclei_channel = nuclei_channel
+        self.cell_channels = cell_channels
+        self.merge_method = merge_method
 
         self.segmenter = CellposeSegmenter()
         self._progress = ProgressEmitter()
@@ -71,6 +79,9 @@ class Converter:
         with h5py.File(self.output_path, "w") as h5file:
             h5file.attrs["input_folder"] = str(self.input_folder)
             h5file.attrs["nuclei_channel"] = self.nuclei_channel
+            if self.cell_channels is not None:
+                h5file.attrs["cell_channels"] = self.cell_channels
+            h5file.attrs["merge_method"] = self.merge_method
 
             for cell_idx, tiff_path in enumerate(tiff_paths):
                 timelapse = self._load_timelapse(tiff_path)
@@ -131,15 +142,33 @@ class Converter:
         return data
 
     def _segment_timelapse(self, timelapse: np.ndarray, file_name: str) -> list[np.ndarray]:
-        """Segment all channels together across frames using Cellpose."""
+        """Segment timelapse using Cellpose with optional channel merging."""
         n_frames = timelapse.shape[0]
         self._progress.emit("segmentation", "frame", 0, n_frames)
         masks = []
         for frame_idx in range(n_frames):
-            frame_data = timelapse[frame_idx]
-            if frame_data.ndim == 3 and frame_data.shape[0] <= 3:
-                frame_data = np.transpose(frame_data, (1, 2, 0))
-            result = self.segmenter.segment_image(frame_data)
+            frame_data = timelapse[frame_idx]  # Shape: (C, H, W)
+
+            # Determine cell_channels to use
+            cell_channels_to_use = self.cell_channels
+            if cell_channels_to_use is None and self.merge_method != 'none':
+                # Use all channels except nuclei_channel
+                n_channels = frame_data.shape[0]
+                cell_channels_to_use = [i for i in range(n_channels) if i != self.nuclei_channel]
+
+            # Transpose to (H, W, C) format expected by cellpose
+            if frame_data.ndim == 3:
+                frame_data_hwc = np.transpose(frame_data, (1, 2, 0))
+            else:
+                frame_data_hwc = frame_data
+
+            # Segment with appropriate method
+            result = self.segmenter.segment_image(
+                frame_data_hwc,
+                nuclei_channel=self.nuclei_channel if self.merge_method != 'none' else None,
+                cell_channels=cell_channels_to_use if self.merge_method != 'none' else None,
+                merge_method=self.merge_method,
+            )
             masks.append(result["masks"])
             self._progress.emit("segmentation", "frame", frame_idx + 1, n_frames)
         return masks

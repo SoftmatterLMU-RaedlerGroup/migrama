@@ -39,6 +39,8 @@ class Extractor:
         output_path: str,
         nuclei_channel: int = 1,
         cell_channel: int = 0,
+        cell_channels: list[int] | None = None,
+        merge_method: str = 'none',
     ) -> None:
         """Initialize extractor.
 
@@ -53,13 +55,19 @@ class Extractor:
         nuclei_channel : int
             Channel index for nuclei
         cell_channel : int
-            Channel index for cell bodies
+            Channel index for cell bodies (used as fallback if cell_channels is None and merge_method != 'none')
+        cell_channels : list[int] | None
+            Channel indices for cell channels to merge. If None and merge_method != 'none', uses cell_channel.
+        merge_method : str
+            Merge method: 'add', 'multiply', or 'none'
         """
         self.source = source
         self.analysis_csv = Path(analysis_csv).resolve()
         self.output_path = Path(output_path).resolve()
         self.nuclei_channel = nuclei_channel
         self.cell_channel = cell_channel
+        self.cell_channels = cell_channels
+        self.merge_method = merge_method
 
         self.cropper = CellCropper(
             source=source,
@@ -88,6 +96,9 @@ class Extractor:
             h5file.attrs["cells_source"] = f"{type(self.source).__name__}"
             h5file.attrs["nuclei_channel"] = self.nuclei_channel
             h5file.attrs["cell_channel"] = self.cell_channel
+            if self.cell_channels is not None:
+                h5file.attrs["cell_channels"] = self.cell_channels
+            h5file.attrs["merge_method"] = self.merge_method
 
             for row in rows:
                 if row.t0 < 0 or row.t1 < row.t0:
@@ -105,8 +116,17 @@ class Extractor:
                     channels=None,
                 )
 
-                nuclei_masks = self._segment_channel(timelapse, self.nuclei_channel)
-                cell_masks = self._segment_channel(timelapse, self.cell_channel)
+                # Segment nuclei and cells
+                if self.merge_method == 'none':
+                    # Use original approach: segment each channel separately
+                    nuclei_masks = self._segment_channel(timelapse, self.nuclei_channel)
+                    cell_masks = self._segment_channel(timelapse, self.cell_channel)
+                else:
+                    # Use 2-channel approach for cell segmentation (nuclear + merged cell channels)
+                    # Segment nuclei separately using nuclear channel only
+                    nuclei_masks = self._segment_channel(timelapse, self.nuclei_channel)
+                    # Segment cells using 2-channel approach
+                    cell_masks = self._segment_cells_merged(timelapse)
 
                 tracker = CellTracker()
                 tracking_maps = tracker.track_frames(nuclei_masks)
@@ -161,6 +181,47 @@ class Extractor:
             result = self.segmenter.segment_image(image)
             masks.append(result["masks"])
         return masks
+
+    def _segment_cells_merged(self, timelapse: np.ndarray) -> list[np.ndarray]:
+        """Segment cells using 2-channel approach (nuclear + merged cell channels).
+
+        Parameters
+        ----------
+        timelapse : np.ndarray
+            Timelapse array with shape (T, C, H, W)
+
+        Returns
+        -------
+        list[np.ndarray]
+            List of cell masks (2D arrays)
+        """
+        cell_masks = []
+
+        # Determine cell_channels to use
+        cell_channels_to_use = self.cell_channels
+        if cell_channels_to_use is None:
+            # Fallback to single cell_channel for backward compatibility
+            cell_channels_to_use = [self.cell_channel]
+
+        for frame_idx in range(timelapse.shape[0]):
+            frame_data = timelapse[frame_idx]  # Shape: (C, H, W)
+
+            # Transpose to (H, W, C) format expected by cellpose
+            if frame_data.ndim == 3:
+                frame_data_hwc = np.transpose(frame_data, (1, 2, 0))
+            else:
+                frame_data_hwc = frame_data
+
+            # Segment with merged channels
+            result = self.segmenter.segment_image(
+                frame_data_hwc,
+                nuclei_channel=self.nuclei_channel,
+                cell_channels=cell_channels_to_use,
+                merge_method=self.merge_method,
+            )
+            cell_masks.append(result["masks"])
+
+        return cell_masks
 
     @staticmethod
     def _map_cells_to_tracks(cell_mask: np.ndarray, tracked_nuclei_mask: np.ndarray) -> np.ndarray:
