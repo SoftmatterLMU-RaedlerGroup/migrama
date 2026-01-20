@@ -200,6 +200,9 @@ Thumbs.db
 !docs/*.tiff
 !docs/*.tif
 
+# Test plot outputs
+tests/_plots/
+
 # Temporary test outputs
 channel_*_overlay.png
 fov_*.png
