@@ -139,8 +139,7 @@ def extract(
     csv: str = typer.Option(..., "--csv", help="Path to analysis CSV file"),
     output: str = typer.Option("./extracted.h5", "--output", "-o", help="Output H5 file path"),
     nuclei_channel: int = typer.Option(1, "--nc", help="Channel index for nuclei"),
-    cell_channel: int = typer.Option(0, "--cc", help="Channel index for cell bodies (deprecated, use --cell-channels)"),
-    cell_channels: str | None = typer.Option(None, "--cell-channels", help="Comma-separated cell channel indices (e.g., '1,2')"),
+    cell_channels: str = typer.Option(..., "--cc", help="Comma-separated cell channel indices (e.g., '0' or '1,2')"),
     merge_method: str = typer.Option("none", "--merge-method", help="Channel merge method: 'add', 'multiply', or 'none'"),
     min_frames: int = typer.Option(1, "--min-frames", help="Minimum frames per sequence"),
     tiff: bool = typer.Option(False, "--tiff", help="Interpret --cells as per-FOV TIFF file path"),
@@ -150,17 +149,12 @@ def extract(
     log_level = logging.DEBUG if debug else logging.INFO
     logging.basicConfig(level=log_level, format="%(levelname)s - %(name)s - %(message)s")
 
-    # Parse cell_channels if provided
-    cell_channels_list: list[int] | None = None
-    if cell_channels is not None:
-        try:
-            cell_channels_list = [int(x.strip()) for x in cell_channels.split(",")]
-        except ValueError:
-            typer.echo(f"Error: Invalid --cell-channels format: {cell_channels}. Expected comma-separated integers (e.g., '1,2')", err=True)
-            raise typer.Exit(1)
-    elif merge_method != 'none':
-        # Fallback to single cell_channel for backward compatibility
-        cell_channels_list = [cell_channel]
+    # Parse cell_channels (required)
+    try:
+        cell_channels_list = [int(x.strip()) for x in cell_channels.split(",")]
+    except ValueError:
+        typer.echo(f"Error: Invalid --cc format: {cell_channels}. Expected comma-separated integers (e.g., '0' or '1,2')", err=True)
+        raise typer.Exit(1) from None
 
     # Validate merge_method
     if merge_method not in ('add', 'multiply', 'none'):
@@ -180,7 +174,6 @@ def extract(
         analysis_csv=csv,
         output_path=output,
         nuclei_channel=nuclei_channel,
-        cell_channel=cell_channel,
         cell_channels=cell_channels_list,
         merge_method=merge_method,
     )

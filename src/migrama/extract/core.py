@@ -38,7 +38,6 @@ class Extractor:
         analysis_csv: str,
         output_path: str,
         nuclei_channel: int = 1,
-        cell_channel: int = 0,
         cell_channels: list[int] | None = None,
         merge_method: str = 'none',
     ) -> None:
@@ -54,10 +53,9 @@ class Extractor:
             Output H5 file path
         nuclei_channel : int
             Channel index for nuclei
-        cell_channel : int
-            Channel index for cell bodies (used as fallback if cell_channels is None and merge_method != 'none')
-        cell_channels : list[int] | None
-            Channel indices for cell channels to merge. If None and merge_method != 'none', uses cell_channel.
+        cell_channels : list[int]
+            Channel indices for cell segmentation. For merge_method='none', uses first channel.
+            For 'add' or 'multiply', merges all channels.
         merge_method : str
             Merge method: 'add', 'multiply', or 'none'
         """
@@ -65,7 +63,6 @@ class Extractor:
         self.analysis_csv = Path(analysis_csv).resolve()
         self.output_path = Path(output_path).resolve()
         self.nuclei_channel = nuclei_channel
-        self.cell_channel = cell_channel
         self.cell_channels = cell_channels
         self.merge_method = merge_method
 
@@ -95,9 +92,7 @@ class Extractor:
         with h5py.File(self.output_path, "w") as h5file:
             h5file.attrs["cells_source"] = f"{type(self.source).__name__}"
             h5file.attrs["nuclei_channel"] = self.nuclei_channel
-            h5file.attrs["cell_channel"] = self.cell_channel
-            if self.cell_channels is not None:
-                h5file.attrs["cell_channels"] = self.cell_channels
+            h5file.attrs["cell_channels"] = self.cell_channels
             h5file.attrs["merge_method"] = self.merge_method
 
             for row in rows:
@@ -118,9 +113,9 @@ class Extractor:
 
                 # Segment nuclei and cells
                 if self.merge_method == 'none':
-                    # Use original approach: segment each channel separately
+                    # Use original approach: segment single channel
                     nuclei_masks = self._segment_channel(timelapse, self.nuclei_channel)
-                    cell_masks = self._segment_channel(timelapse, self.cell_channel)
+                    cell_masks = self._segment_channel(timelapse, self.cell_channels[0])
                 else:
                     # Use 2-channel approach for cell segmentation (nuclear + merged cell channels)
                     # Segment nuclei separately using nuclear channel only
@@ -197,12 +192,6 @@ class Extractor:
         """
         cell_masks = []
 
-        # Determine cell_channels to use
-        cell_channels_to_use = self.cell_channels
-        if cell_channels_to_use is None:
-            # Fallback to single cell_channel for backward compatibility
-            cell_channels_to_use = [self.cell_channel]
-
         for frame_idx in range(timelapse.shape[0]):
             frame_data = timelapse[frame_idx]  # Shape: (C, H, W)
 
@@ -216,7 +205,7 @@ class Extractor:
             result = self.segmenter.segment_image(
                 frame_data_hwc,
                 nuclei_channel=self.nuclei_channel,
-                cell_channels=cell_channels_to_use,
+                cell_channels=self.cell_channels,
                 merge_method=self.merge_method,
             )
             cell_masks.append(result["masks"])
