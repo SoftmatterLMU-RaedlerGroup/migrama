@@ -18,7 +18,7 @@ Migrama is a monolithic Python package that provides specialized tools for proce
 ## Features
 
 - **Pattern Detection**: Automatically identify and annotate micropatterns in microscopy images (migrama.pattern)
-- **Cell Segmentation**: Advanced cell segmentation using Cellpose (migrama.filter)
+- **Cell Segmentation**: Advanced cell segmentation using Cellpose (migrama.analyze)
 - **Boundary Visualization**: Inspect cell-cell boundaries and junctions from extracted masks (migrama.graph)
 - **Tension Inference**: Calculate cellular stress tensors using VMSI (migrama.tension)
 - **Interactive Visualization**: User-friendly interface for data exploration (migrama.viewer)
@@ -80,12 +80,14 @@ migrama --help
 
 This will show all available subcommands:
 
+- `migrama average` - Average time-lapse frames for pattern detection
 - `migrama pattern` - Pattern detection and annotation
 - `migrama analyze` - Cell counting and analysis  
 - `migrama extract` - Extract cropped sequences
 - `migrama convert` - Convert TIFF folders to HDF5
 - `migrama graph` - Boundary and junction visualization
 - `migrama tension` - Tension map analysis
+- `migrama info` - Inspect H5 file structure or plot a dataset slice
 - `migrama viewer` - Interactive viewer
 
 ## Documentation
@@ -116,8 +118,7 @@ make html
 migrama convert \
   --input /path/to/tiff_folder \
   --output ./converted.h5 \
-  --nuclei-channel 0 \
-  --cell-channel 1
+  --nc 0
 ```
 
 2. **Pattern Detection**: Detect patterns and save bounding boxes to CSV
@@ -137,7 +138,7 @@ migrama analyze \
   --cells /path/to/cells.nd2 \
   --csv ./patterns.csv \
   --output ./analysis.csv \
-  --nuclei-channel 1 \
+  --nc 1 \
   --n-cells 4
 ```
 
@@ -150,7 +151,7 @@ migrama extract \
   --cells /path/to/cells.nd2 \
   --csv ./analysis.csv \
   --output ./extracted.h5 \
-  --nuclei-channel 1 \
+  --nc 1 \
   --min-frames 20
 ```
 
@@ -193,28 +194,21 @@ migrama/
 │       │   ├── tracking/ # Cell tracking
 │       │   └── network/ # Graph operations
 │       ├── pattern/     # Pattern detection module
-│       │   ├── __init__.py
-│       │   ├── main.py  # Pattern detection CLI
-│       │   └── utils/   # Pattern utilities
-│       ├── filter/      # Cell counting and analysis
-│       │   ├── __init__.py
-│       │   ├── main.py  # Filter CLI
-│       │   ├── analysis/ # Cell counting
-│       │   └── utils/   # Filter utilities
+│       │   └── __init__.py
+│       ├── analyze/     # Cell counting and analysis
+│       │   └── __init__.py
 │       ├── extract/     # Data extraction module
-│       │   ├── __init__.py
-│       │   └── core.py  # Extraction logic
+│       │   └── __init__.py
+│       ├── convert/     # TIFF-to-H5 conversion
+│       │   └── __init__.py
 │       ├── graph/       # Boundary and junction visualization
-│       │   ├── __init__.py
-│       │   ├── main.py  # Graph CLI
-│       │   └── ...      # Graph analysis modules
+│       │   └── __init__.py
 │       ├── tension/     # Tension map analysis
 │       │   ├── __init__.py
 │       │   ├── cli.py   # Tension CLI
 │       │   └── integration.py
 │       └── viewer/      # Interactive data viewer
 │           ├── __init__.py
-│           ├── main.py  # Viewer entry point
 │           └── ui/      # User interface components
 ├── docs/                # Documentation
 ├── pyproject.toml       # Project configuration
@@ -269,16 +263,12 @@ migrama/
 
 ### Running Tests
 
-```bash
-# From individual package directories
-cd cell-filter && python -m pytest tests/ -v
-cd cell-grapher && python -m pytest tests/ -v
-cd cell-viewer && python -m pytest tests/ -v
-```
+There are currently no tests in this repository. When tests are added, they will
+live in `tests/` and can be run with `python -m pytest tests/ -v`.
 
 ### Code Style
 
-This project follows the development guidelines outlined in [CLAUDE.md](CLAUDE.md), including:
+This project follows the development guidelines outlined in [AGENTS.md](AGENTS.md), including:
 
 - Google-style docstrings
 - Type hints with modern union syntax
