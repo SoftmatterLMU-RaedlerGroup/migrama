@@ -96,7 +96,7 @@ def plot_frame_with_counts(
             va="bottom",
         )
 
-    ax.set_title(f"FOV {fov}, Frame {frame} - Nuclear channel with cell counts", color="white")
+    ax.set_title(f"FOV {fov}, Frame {frame} - Merged channels with cell counts", color="white")
     ax.axis("off")
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -112,11 +112,11 @@ class TestAnalyzeFunctional:
     """Functional tests for analyze with visual output."""
 
     def test_cellpose_counting_random_fov(self, tmp_path: Path):
-        """Test Cellpose counting on a random FOV with 10 frames.
+        """Test Cellpose counting on a random FOV sampling every 20 frames.
 
         Randomly selects a FOV, detects patterns, then counts cells
-        in a random 10-frame window. Produces overlay images showing
-        bboxes and cell counts.
+        at every 20th frame. Produces overlay images with merged channels
+        (normalized and summed) showing bboxes and cell counts.
         """
         # Output directory
         output_dir = PLOTS_DIR / "analyze" / FOURCELL_20250812.name
@@ -149,13 +149,11 @@ class TestAnalyzeFunctional:
 
         print(f"\nSelected FOV {fov_idx} with {len(bboxes)} patterns")
 
-        # Randomly select a 10-frame window
+        # Sample every 20th frame
         n_frames = cell_source.n_frames
-        max_start = max(0, n_frames - 10)
-        start_frame = random.randint(0, max_start)
-        end_frame = min(start_frame + 10, n_frames)
+        frame_indices = list(range(0, n_frames, 20))
 
-        print(f"Time range: frames {start_frame} to {end_frame - 1}")
+        print(f"Sampling {len(frame_indices)} frames (every 20th)")
 
         # Initialize counter
         counter = CellposeCounter()
@@ -164,24 +162,36 @@ class TestAnalyzeFunctional:
         fov_data = cell_source.get_fov(fov_idx)  # Shape: (T, C, H, W)
         nuclei_channel = 1  # Channel 1 is nuclei (matches Analyzer default)
 
-        # Process each frame
-        for frame_idx in range(start_frame, end_frame):
-            # Get full FOV nuclear image
-            full_image = fov_data[frame_idx, nuclei_channel]
+        # Process each sampled frame
+        for frame_idx in frame_indices:
+            # Get all channels and merge (normalize then sum)
+            all_channels = fov_data[frame_idx]  # Shape: (C, H, W)
+            # Normalize each channel to 0-1 range then sum
+            normalized = []
+            for c in range(all_channels.shape[0]):
+                ch = all_channels[c].astype(np.float32)
+                ch_min, ch_max = ch.min(), ch.max()
+                if ch_max > ch_min:
+                    ch = (ch - ch_min) / (ch_max - ch_min)
+                else:
+                    ch = np.zeros_like(ch)
+                normalized.append(ch)
+            merged_image = np.sum(normalized, axis=0)
 
-            # Extract crops for each bbox and count
+            # Extract crops for each bbox (use nuclei channel for counting)
+            nuclei_image = fov_data[frame_idx, nuclei_channel]
             crops = []
             for x, y, w, h in bboxes:
-                crop = full_image[y:y + h, x:x + w]
+                crop = nuclei_image[y:y + h, x:x + w]
                 crops.append(crop)
 
             result = counter.count_nuclei(crops)
             counts = result.counts
 
-            # Plot and save
+            # Plot merged image with counts overlay
             output_path = output_dir / f"fov{fov_idx:03d}_frame{frame_idx:03d}.png"
             plot_frame_with_counts(
-                full_image,
+                merged_image,
                 bboxes,
                 counts,
                 fov_idx,
@@ -193,4 +203,4 @@ class TestAnalyzeFunctional:
         # Summary
         print(f"\n{'=' * 50}")
         print(f"Output directory: {output_dir}")
-        print(f"Generated {end_frame - start_frame} overlay images")
+        print(f"Generated {len(frame_indices)} overlay images")
