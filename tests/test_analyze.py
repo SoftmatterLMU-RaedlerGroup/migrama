@@ -36,7 +36,7 @@ def plot_frame_with_counts(
     Parameters
     ----------
     image : np.ndarray
-        Nuclear channel image (Y, X)
+        Image array - either (H, W) grayscale or (H, W, 3) RGB
     bboxes : list[tuple[int, int, int, int]]
         List of (x, y, w, h) bounding boxes
     counts : list[int]
@@ -50,9 +50,14 @@ def plot_frame_with_counts(
     """
     fig, ax = plt.subplots(figsize=(10, 10))
 
-    # Display image with percentile normalization
-    vmin, vmax = np.percentile(image, [1, 99])
-    ax.imshow(image, cmap="gray", vmin=vmin, vmax=vmax)
+    # Display image (RGB or grayscale)
+    if image.ndim == 3:
+        # RGB image - clip to [0, 1] range
+        ax.imshow(np.clip(image, 0, 1))
+    else:
+        # Grayscale with percentile normalization
+        vmin, vmax = np.percentile(image, [1, 99])
+        ax.imshow(image, cmap="gray", vmin=vmin, vmax=vmax)
 
     # Draw bounding boxes with counts
     for i, ((x, y, w, h), count) in enumerate(zip(bboxes, counts, strict=True)):
@@ -164,11 +169,13 @@ class TestAnalyzeFunctional:
 
         # Process each sampled frame
         for frame_idx in frame_indices:
-            # Get all channels and merge (normalize then sum)
+            # Get all channels and merge as RGB
             all_channels = fov_data[frame_idx]  # Shape: (C, H, W)
-            # Normalize each channel to 0-1 range then sum
+            n_channels = all_channels.shape[0]
+
+            # Normalize each channel to 0-1 range
             normalized = []
-            for c in range(all_channels.shape[0]):
+            for c in range(n_channels):
                 ch = all_channels[c].astype(np.float32)
                 ch_min, ch_max = ch.min(), ch.max()
                 if ch_max > ch_min:
@@ -176,7 +183,12 @@ class TestAnalyzeFunctional:
                 else:
                     ch = np.zeros_like(ch)
                 normalized.append(ch)
-            merged_image = np.sum(normalized, axis=0)
+
+            # Create RGB image (pad with zeros if fewer than 3 channels)
+            h, w = normalized[0].shape
+            rgb_image = np.zeros((h, w, 3), dtype=np.float32)
+            for c in range(min(n_channels, 3)):
+                rgb_image[:, :, c] = normalized[c]
 
             # Extract crops for each bbox (use nuclei channel for counting)
             nuclei_image = fov_data[frame_idx, nuclei_channel]
@@ -188,10 +200,10 @@ class TestAnalyzeFunctional:
             result = counter.count_nuclei(crops)
             counts = result.counts
 
-            # Plot merged image with counts overlay
+            # Plot RGB image with counts overlay
             output_path = output_dir / f"fov{fov_idx:03d}_frame{frame_idx:03d}.png"
             plot_frame_with_counts(
-                merged_image,
+                rgb_image,
                 bboxes,
                 counts,
                 fov_idx,
