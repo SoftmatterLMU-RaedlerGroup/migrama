@@ -117,13 +117,7 @@ class Extractor:
             if n_frames < min_frames:
                 continue
 
-            timelapse = self.cropper.extract_timelapse(
-                row.fov,
-                row.cell,
-                start_frame=row.t0,
-                end_frame=row.t1 + 1,
-                channels=None,
-            )
+            timelapse = self.cropper.extract(row.fov, row.cell, frames=(row.t0, row.t1 + 1))
 
             # Segment nuclei (always needed for tracking)
             nuclei_masks = self._segment_channel(timelapse, self.nuclei_channel)

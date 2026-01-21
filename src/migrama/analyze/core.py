@@ -28,6 +28,79 @@ class AnalysisRecord:
     t1: int
 
 
+class PatternTracker:
+    """Track pattern state during analysis with progressive reduction.
+
+    Patterns are dropped when they consistently show 0 nuclei, reducing
+    the number of segmentations needed as analysis progresses.
+    """
+
+    def __init__(self, n_patterns: int, zero_threshold: int = 3) -> None:
+        """Initialize pattern tracking state.
+
+        Parameters
+        ----------
+        n_patterns : int
+            Total number of patterns to track
+        zero_threshold : int
+            Number of consecutive zero-count frames before dropping a pattern
+        """
+        self.tracked: set[int] = set(range(n_patterns))
+        self.dropped_zero: set[int] = set()
+        self.counts: dict[int, list[int]] = {i: [] for i in range(n_patterns)}
+        self.masks: dict[int, list[np.ndarray]] = {i: [] for i in range(n_patterns)}
+        self.zero_streak: dict[int, int] = {i: 0 for i in range(n_patterns)}
+        self.zero_threshold = zero_threshold
+
+    def is_tracked(self, idx: int) -> bool:
+        """Check if a pattern is still being tracked."""
+        return idx in self.tracked
+
+    def get_tracked_indices(self) -> list[int]:
+        """Get sorted list of indices still being tracked."""
+        return sorted(self.tracked)
+
+    def record_result(self, idx: int, count: int, mask: np.ndarray) -> None:
+        """Record a segmentation result for a pattern.
+
+        If count is 0, increment zero streak. If zero streak exceeds
+        threshold, drop the pattern from tracking.
+        """
+        self.counts[idx].append(count)
+        self.masks[idx].append(mask)
+
+        if count == 0:
+            self.zero_streak[idx] += 1
+            if self.zero_streak[idx] >= self.zero_threshold:
+                self._drop_zero(idx)
+        else:
+            self.zero_streak[idx] = 0
+
+    def record_skipped(self, idx: int) -> None:
+        """Record that a pattern was skipped (already dropped).
+
+        Appends -1 count and empty mask to maintain frame alignment.
+        """
+        self.counts[idx].append(-1)
+        # Use a placeholder empty mask
+        self.masks[idx].append(np.zeros((1, 1), dtype=np.uint16))
+
+    def _drop_zero(self, idx: int) -> None:
+        """Mark pattern as dropped due to consecutive zero nuclei."""
+        if idx in self.tracked:
+            self.tracked.remove(idx)
+            self.dropped_zero.add(idx)
+            logger.debug(f"Dropped pattern {idx} after {self.zero_threshold} consecutive zero-count frames")
+
+    def get_counts(self, idx: int) -> list[int]:
+        """Get count history for a pattern."""
+        return self.counts[idx]
+
+    def get_masks(self, idx: int) -> list[np.ndarray]:
+        """Get mask history for a pattern."""
+        return self.masks[idx]
+
+
 class Analyzer:
     """Analyze cell counts for patterns across frames with mask caching."""
 
@@ -82,6 +155,9 @@ class Analyzer:
     def analyze(self, output_path: str) -> list[AnalysisRecord]:
         """Run analysis, cache masks, and write CSV output.
 
+        Uses progressive reduction: patterns with consecutive zero-count
+        frames are dropped from tracking to reduce segmentation work.
+
         Parameters
         ----------
         output_path : str
@@ -105,48 +181,101 @@ class Analyzer:
             if not bboxes:
                 continue
 
-            logger.info(f"Analyzing FOV {fov_idx} with {len(bboxes)} patterns")
+            n_patterns = len(bboxes)
+            n_frames = self.cropper.n_frames
+            logger.info(f"Analyzing FOV {fov_idx}: {n_patterns} patterns × {n_frames} frames")
 
             # Create FOV group in cache
             fov_group = cache_store.create_group(f"fov{fov_idx:03d}")
 
-            counts_per_pattern = [[] for _ in bboxes]
-            masks_per_pattern: list[list[np.ndarray]] = [[] for _ in bboxes]
+            # Initialize pattern tracker for progressive reduction
+            tracker = PatternTracker(n_patterns, zero_threshold=3)
 
-            for frame_idx in range(self.cropper.n_frames):
-                # Extract all crops for this frame
-                crops = [
-                    self.cropper.extract_all_channels(fov_idx, frame_idx, cell_idx)
-                    for cell_idx in range(len(bboxes))
-                ]
+            for frame_idx in range(n_frames):
+                # Get indices still being tracked
+                tracked_indices = tracker.get_tracked_indices()
 
-                # Count and segment all crops at once
+                # Log progress every 20 frames
+                if frame_idx % 20 == 0 or frame_idx == n_frames - 1:
+                    logger.info(f"  Frame {frame_idx + 1}/{n_frames} (tracking {len(tracked_indices)}/{n_patterns} patterns)")
+
+                if not tracked_indices:
+                    # All patterns dropped, fill remaining frames with skipped
+                    for cell_idx in range(n_patterns):
+                        tracker.record_skipped(cell_idx)
+                    continue
+
+                # Extract crops only for tracked patterns
+                crops = []
+                for cell_idx in tracked_indices:
+                    crop = self.cropper.extract(fov_idx, cell_idx, frames=frame_idx)
+                    crops.append(crop)
+
+                # Count and segment tracked patterns
                 result = self.counter.count_nuclei(crops)
 
-                # Distribute results to per-pattern lists
-                for cell_idx, (count, mask) in enumerate(zip(result.counts, result.masks)):
-                    counts_per_pattern[cell_idx].append(count)
-                    masks_per_pattern[cell_idx].append(mask)
+                # Record results for tracked patterns
+                for i, cell_idx in enumerate(tracked_indices):
+                    tracker.record_result(cell_idx, result.counts[i], result.masks[i])
+
+                # Record skipped for dropped patterns
+                for cell_idx in range(n_patterns):
+                    if not tracker.is_tracked(cell_idx) and cell_idx not in tracker.dropped_zero:
+                        # Pattern was just dropped this frame, already recorded
+                        pass
+                    elif cell_idx in tracker.dropped_zero and len(tracker.get_counts(cell_idx)) < frame_idx + 1:
+                        tracker.record_skipped(cell_idx)
+
+            # Log dropout summary
+            if tracker.dropped_zero:
+                logger.info(f"  Dropped {len(tracker.dropped_zero)} patterns due to zero nuclei: {sorted(tracker.dropped_zero)}")
 
             # Save masks to cache and compute t0/t1
             for cell_idx, bbox in enumerate(bboxes):
                 # Stack masks for this pattern: (T, H, W)
-                masks_stack = np.stack(masks_per_pattern[cell_idx])
-                
+                masks_list = tracker.get_masks(cell_idx)
+
+                # Handle variable mask sizes (from skipped frames)
+                # Find the most common shape
+                shapes = [m.shape for m in masks_list if m.shape != (1, 1)]
+                if shapes:
+                    target_shape = max(set(shapes), key=shapes.count)
+                else:
+                    target_shape = (64, 64)  # fallback
+
+                # Resize placeholder masks to target shape
+                normalized_masks = []
+                for m in masks_list:
+                    if m.shape == (1, 1):
+                        normalized_masks.append(np.zeros(target_shape, dtype=np.uint16))
+                    elif m.shape != target_shape:
+                        # Pad or crop to target shape
+                        padded = np.zeros(target_shape, dtype=m.dtype)
+                        h, w = min(m.shape[0], target_shape[0]), min(m.shape[1], target_shape[1])
+                        padded[:h, :w] = m[:h, :w]
+                        normalized_masks.append(padded)
+                    else:
+                        normalized_masks.append(m)
+
+                masks_stack = np.stack(normalized_masks)
+
                 # Save to cache
                 cell_group = fov_group.create_group(f"cell{cell_idx:03d}")
-                cell_group.create_dataset(
+                cell_group.create_array(
                     "cell_masks",
-                    data=masks_stack,
+                    shape=masks_stack.shape,
                     chunks=(1, masks_stack.shape[1], masks_stack.shape[2]),
                     dtype=masks_stack.dtype,
+                    data=masks_stack,
                 )
                 # Store bbox metadata
                 cell_group.attrs["bbox"] = [bbox.x, bbox.y, bbox.w, bbox.h]
                 cell_group.attrs["fov"] = bbox.fov
                 cell_group.attrs["cell"] = bbox.cell
 
-                t0, t1 = self._find_longest_run(counts_per_pattern[cell_idx], self.n_cells)
+                # Compute t0/t1 from counts (excluding -1 skipped frames)
+                counts = tracker.get_counts(cell_idx)
+                t0, t1 = self._find_longest_run(counts, self.n_cells)
                 records.append(
                     AnalysisRecord(
                         cell=bbox.cell,
@@ -160,7 +289,7 @@ class Analyzer:
                     )
                 )
 
-            logger.info(f"Cached {len(bboxes)} pattern masks for FOV {fov_idx}")
+            logger.info(f"  Cached {len(bboxes)} pattern masks for FOV {fov_idx}")
 
         # Store global metadata in cache
         cache_store.attrs["nuclei_channel"] = self.nuclei_channel
@@ -175,14 +304,27 @@ class Analyzer:
 
     @staticmethod
     def _find_longest_run(counts: list[int], target: int) -> tuple[int, int]:
-        """Find longest contiguous run of target counts."""
+        """Find longest contiguous run of target counts.
+
+        Skips frames with count == -1 (dropped patterns).
+        """
         best_start = -1
         best_end = -1
         best_len = 0
         current_start: int | None = None
 
         for idx, count in enumerate(counts):
-            if count == target:
+            if count == -1:
+                # Skipped frame breaks the run
+                if current_start is not None:
+                    current_end = idx - 1
+                    length = current_end - current_start + 1
+                    if length > best_len:
+                        best_len = length
+                        best_start = current_start
+                        best_end = current_end
+                    current_start = None
+            elif count == target:
                 if current_start is None:
                     current_start = idx
             elif current_start is not None:

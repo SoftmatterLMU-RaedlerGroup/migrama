@@ -203,6 +203,9 @@ Thumbs.db
 # Test plot outputs
 tests/_plots/
 
+# Test results (extract workflow outputs)
+tests/_results/
+
 # Temporary test outputs
 channel_*_overlay.png
 fov_*.png
