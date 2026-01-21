@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pytest
 
-from migrama.core import WatershedCounter
+from migrama.core import CellposeCounter
 from migrama.core.cell_source import Nd2CellFovSource
 from migrama.core.pattern import PatternDetector
 from migrama.core.pattern.source import Nd2PatternFovSource
@@ -111,8 +111,8 @@ def plot_frame_with_counts(
 class TestAnalyzeFunctional:
     """Functional tests for analyze with visual output."""
 
-    def test_watershed_counting_random_fov(self, tmp_path: Path):
-        """Test watershed counting on a random FOV with 10 frames.
+    def test_cellpose_counting_random_fov(self, tmp_path: Path):
+        """Test Cellpose counting on a random FOV with 10 frames.
 
         Randomly selects a FOV, detects patterns, then counts cells
         in a random 10-frame window. Produces overlay images showing
@@ -158,7 +158,7 @@ class TestAnalyzeFunctional:
         print(f"Time range: frames {start_frame} to {end_frame - 1}")
 
         # Initialize counter
-        counter = WatershedCounter()
+        counter = CellposeCounter()
 
         # Get FOV data
         fov_data = cell_source.get_fov(fov_idx)  # Shape: (T, C, H, W)
@@ -175,7 +175,7 @@ class TestAnalyzeFunctional:
                 crop = full_image[y:y + h, x:x + w]
                 crops.append(crop)
 
-            result = counter.count_nuclei(crops, min_size=15)
+            result = counter.count_nuclei(crops)
             counts = result.counts
 
             # Plot and save
