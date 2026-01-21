@@ -263,10 +263,9 @@ class Analyzer:
                 cell_group = fov_group.create_group(f"cell{cell_idx:03d}")
                 cell_group.create_array(
                     "cell_masks",
-                    shape=masks_stack.shape,
+                    data=masks_stack,
                     chunks=(1, masks_stack.shape[1], masks_stack.shape[2]),
                     dtype=masks_stack.dtype,
-                    data=masks_stack,
                 )
                 # Store bbox metadata
                 cell_group.attrs["bbox"] = [bbox.x, bbox.y, bbox.w, bbox.h]
