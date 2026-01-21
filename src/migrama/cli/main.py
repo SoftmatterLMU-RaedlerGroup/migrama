@@ -101,16 +101,30 @@ def analyze(
         ..., "--cells", "-c", help="Path to cells ND2 file or per-FOV TIFF file (e.g., ./folder/xxx_0.tif)"
     ),
     csv: str = typer.Option(..., "--csv", help="Path to patterns CSV file"),
+    cache: str = typer.Option(..., "--cache", help="Output cache.ome.zarr path for mask storage"),
     output: str = typer.Option("./analysis.csv", "--output", "-o", help="Output CSV file path"),
     nuclei_channel: int = typer.Option(1, "--nc", help="Channel index for nuclei"),
+    cell_channels: str = typer.Option(..., "--cc", help="Comma-separated cell channel indices (e.g., '0' or '1,2')"),
+    merge_method: str = typer.Option("none", "--merge-method", help="Channel merge method: 'add', 'multiply', or 'none'"),
     n_cells: int = typer.Option(4, "--n-cells", help="Target number of cells per pattern"),
-    min_size: int = typer.Option(15, "--min-size", help="Minimum object size for Cellpose"),
     tiff: bool = typer.Option(False, "--tiff", help="Interpret --cells as per-FOV TIFF file path"),
     debug: bool = typer.Option(False, "--debug"),
 ):
-    """Analyze cell counts and output t0/t1 ranges."""
+    """Analyze cell counts, cache masks, and output t0/t1 ranges."""
     log_level = logging.DEBUG if debug else logging.INFO
     logging.basicConfig(level=log_level, format="%(levelname)s - %(name)s - %(message)s")
+
+    # Parse cell_channels
+    try:
+        cell_channels_list = [int(x.strip()) for x in cell_channels.split(",")]
+    except ValueError:
+        typer.echo(f"Error: Invalid --cc format: {cell_channels}. Expected comma-separated integers (e.g., '0' or '1,2')", err=True)
+        raise typer.Exit(1) from None
+
+    # Validate merge_method
+    if merge_method not in ('add', 'multiply', 'none'):
+        typer.echo(f"Error: Invalid --merge-method: {merge_method}. Must be 'add', 'multiply', or 'none'", err=True)
+        raise typer.Exit(1)
 
     from ..analyze import Analyzer
     from ..core.cell_source import Nd2CellFovSource, TiffCellFovSource
@@ -123,12 +137,15 @@ def analyze(
     analyzer = Analyzer(
         source=source,
         csv_path=csv,
+        cache_path=cache,
         nuclei_channel=nuclei_channel,
+        cell_channels=cell_channels_list,
+        merge_method=merge_method,
         n_cells=n_cells,
-        min_size=min_size,
     )
     records = analyzer.analyze(output)
     typer.echo(f"Saved {len(records)} records to {output}")
+    typer.echo(f"Cached masks to {cache}")
 
 
 @app.command()
@@ -141,6 +158,7 @@ def extract(
     nuclei_channel: int = typer.Option(1, "--nc", help="Channel index for nuclei"),
     cell_channels: str = typer.Option(..., "--cc", help="Comma-separated cell channel indices (e.g., '0' or '1,2')"),
     merge_method: str = typer.Option("none", "--merge-method", help="Channel merge method: 'add', 'multiply', or 'none'"),
+    cache: str = typer.Option(None, "--cache", help="Path to cache.ome.zarr with pre-computed cell masks"),
     min_frames: int = typer.Option(1, "--min-frames", help="Minimum frames per sequence"),
     tiff: bool = typer.Option(False, "--tiff", help="Interpret --cells as per-FOV TIFF file path"),
     debug: bool = typer.Option(False, "--debug"),
@@ -176,6 +194,7 @@ def extract(
         nuclei_channel=nuclei_channel,
         cell_channels=cell_channels_list,
         merge_method=merge_method,
+        cache_path=cache,
     )
     sequences = extractor.extract(min_frames=min_frames)
     typer.echo(f"Saved {sequences} sequences to {output}")

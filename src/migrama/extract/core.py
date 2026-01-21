@@ -40,6 +40,7 @@ class Extractor:
         nuclei_channel: int = 1,
         cell_channels: list[int] | None = None,
         merge_method: str = 'none',
+        cache_path: str | None = None,
     ) -> None:
         """Initialize extractor.
 
@@ -58,6 +59,8 @@ class Extractor:
             For 'add' or 'multiply', merges all channels.
         merge_method : str
             Merge method: 'add', 'multiply', or 'none'
+        cache_path : str | None
+            Path to cache.ome.zarr with pre-computed cell masks from analyze step
         """
         self.source = source
         self.analysis_csv = Path(analysis_csv).resolve()
@@ -65,6 +68,7 @@ class Extractor:
         self.nuclei_channel = nuclei_channel
         self.cell_channels = cell_channels
         self.merge_method = merge_method
+        self.cache_path = Path(cache_path).resolve() if cache_path else None
 
         self.cropper = CellCropper(
             source=source,
@@ -72,6 +76,13 @@ class Extractor:
             nuclei_channel=nuclei_channel,
         )
         self.segmenter = CellposeSegmenter()
+
+        # Load cache if provided
+        self._cache = None
+        if self.cache_path and self.cache_path.exists():
+            import zarr
+            self._cache = zarr.open(str(self.cache_path), mode='r')
+            logger.info(f"Loaded mask cache from {self.cache_path}")
 
     def extract(self, min_frames: int = 1) -> int:
         """Extract sequences to OME-Zarr.
@@ -114,17 +125,17 @@ class Extractor:
                 channels=None,
             )
 
-            # Segment nuclei and cells
-            if self.merge_method == 'none':
-                # Use original approach: segment single channel
-                nuclei_masks = self._segment_channel(timelapse, self.nuclei_channel)
-                cell_masks = self._segment_channel(timelapse, self.cell_channels[0])
-            else:
-                # Use 2-channel approach for cell segmentation (nuclear + merged cell channels)
-                # Segment nuclei separately using nuclear channel only
-                nuclei_masks = self._segment_channel(timelapse, self.nuclei_channel)
-                # Segment cells using 2-channel approach
-                cell_masks = self._segment_cells_merged(timelapse)
+            # Segment nuclei (always needed for tracking)
+            nuclei_masks = self._segment_channel(timelapse, self.nuclei_channel)
+
+            # Try to load cell masks from cache, otherwise segment
+            cell_masks = self._load_cached_masks(row.fov, row.cell, row.t0, row.t1)
+            if cell_masks is None:
+                # Cache miss - segment cells
+                if self.merge_method == 'none':
+                    cell_masks = self._segment_channel(timelapse, self.cell_channels[0])
+                else:
+                    cell_masks = self._segment_cells_merged(timelapse)
 
             tracker = CellTracker()
             tracking_maps = tracker.track_frames(nuclei_masks)
@@ -158,6 +169,26 @@ class Extractor:
 
         logger.info(f"Saved {sequences_written} sequences to {self.output_path}")
         return sequences_written
+
+    def _load_cached_masks(self, fov: int, cell: int, t0: int, t1: int) -> list[np.ndarray] | None:
+        """Load cell masks from cache for the given time range.
+
+        Returns None if cache is not available or masks not found.
+        """
+        if self._cache is None:
+            return None
+
+        try:
+            fov_key = f"fov{fov:03d}"
+            cell_key = f"cell{cell:03d}"
+            masks_array = self._cache[fov_key][cell_key]["cell_masks"]
+
+            # Extract the time range [t0:t1+1]
+            masks_slice = masks_array[t0:t1 + 1]
+            return [masks_slice[i] for i in range(masks_slice.shape[0])]
+        except KeyError:
+            logger.debug(f"Cache miss: {fov_key}/{cell_key} not found")
+            return None
 
     @staticmethod
     def _load_analysis_rows(csv_path: Path) -> list[AnalysisRow]:

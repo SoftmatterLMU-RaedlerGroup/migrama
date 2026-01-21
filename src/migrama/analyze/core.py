@@ -5,6 +5,8 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
+
 from ..core import CellposeCounter
 from ..core.cell_source import CellFovSource
 from ..core.pattern import CellCropper
@@ -27,15 +29,17 @@ class AnalysisRecord:
 
 
 class Analyzer:
-    """Analyze cell counts for patterns across frames."""
+    """Analyze cell counts for patterns across frames with mask caching."""
 
     def __init__(
         self,
         source: CellFovSource,
         csv_path: str,
+        cache_path: str,
         nuclei_channel: int = 1,
+        cell_channels: list[int] | None = None,
+        merge_method: str = 'none',
         n_cells: int = 4,
-        min_size: int = 15,
     ) -> None:
         """Initialize Analyzer.
 
@@ -45,28 +49,38 @@ class Analyzer:
             Source of cell timelapse data (ND2 or TIFF)
         csv_path : str
             Path to patterns CSV file
+        cache_path : str
+            Path to output cache.ome.zarr for mask storage
         nuclei_channel : int
             Channel index for nuclei
+        cell_channels : list[int] | None
+            Channel indices for cell segmentation
+        merge_method : str
+            Channel merge method: 'add', 'multiply', or 'none'
         n_cells : int
             Target number of cells per pattern
-        min_size : int
-            Minimum object size for Cellpose
         """
         self.source = source
         self.csv_path = Path(csv_path).resolve()
+        self.cache_path = Path(cache_path).resolve()
         self.nuclei_channel = nuclei_channel
+        self.cell_channels = cell_channels
+        self.merge_method = merge_method
         self.n_cells = n_cells
-        self.min_size = min_size
 
         self.cropper = CellCropper(
             source=source,
             bboxes_csv=str(self.csv_path),
             nuclei_channel=nuclei_channel,
         )
-        self.counter = CellposeCounter()
+        self.counter = CellposeCounter(
+            nuclei_channel=nuclei_channel,
+            cell_channels=cell_channels,
+            merge_method=merge_method,
+        )
 
     def analyze(self, output_path: str) -> list[AnalysisRecord]:
-        """Run analysis and write CSV output.
+        """Run analysis, cache masks, and write CSV output.
 
         Parameters
         ----------
@@ -78,7 +92,13 @@ class Analyzer:
         list[AnalysisRecord]
             Analysis records for each pattern
         """
+        import zarr
+
         records: list[AnalysisRecord] = []
+
+        # Create cache zarr store
+        self.cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_store = zarr.open(str(self.cache_path), mode='w')
 
         for fov_idx in sorted(self.cropper.bboxes_by_fov.keys()):
             bboxes = self.cropper.get_bboxes(fov_idx)
@@ -86,17 +106,46 @@ class Analyzer:
                 continue
 
             logger.info(f"Analyzing FOV {fov_idx} with {len(bboxes)} patterns")
+
+            # Create FOV group in cache
+            fov_group = cache_store.create_group(f"fov{fov_idx:03d}")
+
             counts_per_pattern = [[] for _ in bboxes]
+            masks_per_pattern: list[list[np.ndarray]] = [[] for _ in bboxes]
 
             for frame_idx in range(self.cropper.n_frames):
-                nuclei_list = [
-                    self.cropper.extract_nuclei(fov_idx, frame_idx, cell_idx) for cell_idx in range(len(bboxes))
+                # Extract all crops for this frame
+                crops = [
+                    self.cropper.extract_all_channels(fov_idx, frame_idx, cell_idx)
+                    for cell_idx in range(len(bboxes))
                 ]
-                counts = self.counter.count_nuclei(nuclei_list, min_size=self.min_size)
-                for cell_idx, count in enumerate(counts):
-                    counts_per_pattern[cell_idx].append(count)
 
+                # Count and segment all crops at once
+                result = self.counter.count_nuclei(crops)
+
+                # Distribute results to per-pattern lists
+                for cell_idx, (count, mask) in enumerate(zip(result.counts, result.masks)):
+                    counts_per_pattern[cell_idx].append(count)
+                    masks_per_pattern[cell_idx].append(mask)
+
+            # Save masks to cache and compute t0/t1
             for cell_idx, bbox in enumerate(bboxes):
+                # Stack masks for this pattern: (T, H, W)
+                masks_stack = np.stack(masks_per_pattern[cell_idx])
+                
+                # Save to cache
+                cell_group = fov_group.create_group(f"cell{cell_idx:03d}")
+                cell_group.create_dataset(
+                    "cell_masks",
+                    data=masks_stack,
+                    chunks=(1, masks_stack.shape[1], masks_stack.shape[2]),
+                    dtype=masks_stack.dtype,
+                )
+                # Store bbox metadata
+                cell_group.attrs["bbox"] = [bbox.x, bbox.y, bbox.w, bbox.h]
+                cell_group.attrs["fov"] = bbox.fov
+                cell_group.attrs["cell"] = bbox.cell
+
                 t0, t1 = self._find_longest_run(counts_per_pattern[cell_idx], self.n_cells)
                 records.append(
                     AnalysisRecord(
@@ -110,6 +159,16 @@ class Analyzer:
                         t1=t1,
                     )
                 )
+
+            logger.info(f"Cached {len(bboxes)} pattern masks for FOV {fov_idx}")
+
+        # Store global metadata in cache
+        cache_store.attrs["nuclei_channel"] = self.nuclei_channel
+        cache_store.attrs["cell_channels"] = self.cell_channels
+        cache_store.attrs["merge_method"] = self.merge_method
+        cache_store.attrs["n_fovs"] = len(self.cropper.bboxes_by_fov)
+
+        logger.info(f"Saved mask cache to {self.cache_path}")
 
         self._write_csv(output_path, records)
         return records
