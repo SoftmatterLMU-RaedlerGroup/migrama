@@ -48,7 +48,7 @@ def plot_frame_with_counts(
     output_path : Path
         Path to save the figure
     """
-    fig, ax = plt.subplots(figsize=(10, 10))
+    fig, ax = plt.subplots(figsize=(12, 12))
 
     # Display image (RGB or grayscale)
     if image.ndim == 3:
@@ -105,7 +105,7 @@ def plot_frame_with_counts(
     ax.axis("off")
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_path, dpi=150, bbox_inches="tight", facecolor="black")
+    fig.savefig(output_path, dpi=100, bbox_inches="tight", facecolor="black")
     plt.close(fig)
 
 
