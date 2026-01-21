@@ -265,7 +265,6 @@ class Analyzer:
                     "cell_masks",
                     data=masks_stack,
                     chunks=(1, masks_stack.shape[1], masks_stack.shape[2]),
-                    dtype=masks_stack.dtype,
                 )
                 # Store bbox metadata
                 cell_group.attrs["bbox"] = [bbox.x, bbox.y, bbox.w, bbox.h]
