@@ -213,3 +213,4 @@ test_output_*
 
 data/
 output/
+.serena/
