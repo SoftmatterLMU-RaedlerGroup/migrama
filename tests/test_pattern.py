@@ -54,7 +54,7 @@ def plot_fov_with_bboxes(
         fov: FOV index for title
         output_path: Path to save the figure
     """
-    fig, ax = plt.subplots(figsize=(12, 12))
+    fig, ax = plt.subplots(figsize=(8, 8))
 
     # Display image with percentile normalization
     vmin, vmax = np.percentile(image, [1, 99])
@@ -83,7 +83,7 @@ def plot_fov_with_bboxes(
     ax.axis("off")
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_path, dpi=150, bbox_inches="tight", facecolor="black")
+    fig.savefig(output_path, dpi=100, bbox_inches="tight", facecolor="black")
     plt.close(fig)
 
 

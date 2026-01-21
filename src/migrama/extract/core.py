@@ -5,10 +5,10 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-import h5py
 import numpy as np
 
 from ..core import CellposeSegmenter, CellTracker
+from ..core.io import create_zarr_store, write_global_metadata, write_sequence
 from ..core.cell_source import CellFovSource
 from ..core.pattern import CellCropper
 
@@ -50,7 +50,7 @@ class Extractor:
         analysis_csv : str
             Path to analysis CSV file
         output_path : str
-            Output H5 file path
+            Output Zarr store path
         nuclei_channel : int
             Channel index for nuclei
         cell_channels : list[int]
@@ -74,7 +74,7 @@ class Extractor:
         self.segmenter = CellposeSegmenter()
 
     def extract(self, min_frames: int = 1) -> int:
-        """Extract sequences to H5.
+        """Extract sequences to OME-Zarr.
 
         Parameters
         ----------
@@ -89,60 +89,72 @@ class Extractor:
         rows = self._load_analysis_rows(self.analysis_csv)
         sequences_written = 0
 
-        with h5py.File(self.output_path, "w") as h5file:
-            h5file.attrs["cells_source"] = f"{type(self.source).__name__}"
-            h5file.attrs["nuclei_channel"] = self.nuclei_channel
-            h5file.attrs["cell_channels"] = self.cell_channels
-            h5file.attrs["merge_method"] = self.merge_method
+        root = create_zarr_store(self.output_path, overwrite=True)
+        write_global_metadata(
+            root,
+            cells_source=f"{type(self.source).__name__}",
+            nuclei_channel=self.nuclei_channel,
+            cell_channels=self.cell_channels,
+            merge_method=self.merge_method,
+        )
 
-            for row in rows:
-                if row.t0 < 0 or row.t1 < row.t0:
-                    continue
+        for row in rows:
+            if row.t0 < 0 or row.t1 < row.t0:
+                continue
 
-                n_frames = row.t1 - row.t0 + 1
-                if n_frames < min_frames:
-                    continue
+            n_frames = row.t1 - row.t0 + 1
+            if n_frames < min_frames:
+                continue
 
-                timelapse = self.cropper.extract_timelapse(
-                    row.fov,
-                    row.cell,
-                    start_frame=row.t0,
-                    end_frame=row.t1 + 1,
-                    channels=None,
-                )
+            timelapse = self.cropper.extract_timelapse(
+                row.fov,
+                row.cell,
+                start_frame=row.t0,
+                end_frame=row.t1 + 1,
+                channels=None,
+            )
 
-                # Segment nuclei and cells
-                if self.merge_method == 'none':
-                    # Use original approach: segment single channel
-                    nuclei_masks = self._segment_channel(timelapse, self.nuclei_channel)
-                    cell_masks = self._segment_channel(timelapse, self.cell_channels[0])
-                else:
-                    # Use 2-channel approach for cell segmentation (nuclear + merged cell channels)
-                    # Segment nuclei separately using nuclear channel only
-                    nuclei_masks = self._segment_channel(timelapse, self.nuclei_channel)
-                    # Segment cells using 2-channel approach
-                    cell_masks = self._segment_cells_merged(timelapse)
+            # Segment nuclei and cells
+            if self.merge_method == 'none':
+                # Use original approach: segment single channel
+                nuclei_masks = self._segment_channel(timelapse, self.nuclei_channel)
+                cell_masks = self._segment_channel(timelapse, self.cell_channels[0])
+            else:
+                # Use 2-channel approach for cell segmentation (nuclear + merged cell channels)
+                # Segment nuclei separately using nuclear channel only
+                nuclei_masks = self._segment_channel(timelapse, self.nuclei_channel)
+                # Segment cells using 2-channel approach
+                cell_masks = self._segment_cells_merged(timelapse)
 
-                tracker = CellTracker()
-                tracking_maps = tracker.track_frames(nuclei_masks)
-                tracked_nuclei_masks = [
-                    tracker.get_tracked_mask(mask, track_map)
-                    for mask, track_map in zip(nuclei_masks, tracking_maps, strict=False)
-                ]
+            tracker = CellTracker()
+            tracking_maps = tracker.track_frames(nuclei_masks)
+            tracked_nuclei_masks = [
+                tracker.get_tracked_mask(mask, track_map)
+                for mask, track_map in zip(nuclei_masks, tracking_maps, strict=False)
+            ]
 
-                tracked_cell_masks = [
-                    self._map_cells_to_tracks(cell_mask, tracked_nuclei_mask)
-                    for cell_mask, tracked_nuclei_mask in zip(cell_masks, tracked_nuclei_masks, strict=False)
-                ]
+            tracked_cell_masks = [
+                self._map_cells_to_tracks(cell_mask, tracked_nuclei_mask)
+                for cell_mask, tracked_nuclei_mask in zip(cell_masks, tracked_nuclei_masks, strict=False)
+            ]
 
-                self._write_sequence(
-                    h5file,
-                    row,
-                    timelapse,
-                    np.stack(tracked_nuclei_masks),
-                    np.stack(tracked_cell_masks),
-                )
-                sequences_written += 1
+            channels = [f"channel_{i}" for i in range(timelapse.shape[1])]
+            bbox = np.array([row.x, row.y, row.w, row.h], dtype=np.int32)
+
+            write_sequence(
+                root,
+                fov_idx=row.fov,
+                cell_idx=row.cell,
+                seq_idx=0,
+                data=timelapse,
+                nuclei_masks=np.stack(tracked_nuclei_masks),
+                cell_masks=np.stack(tracked_cell_masks),
+                channels=channels,
+                t0=row.t0,
+                t1=row.t1,
+                bbox=bbox,
+            )
+            sequences_written += 1
 
         logger.info(f"Saved {sequences_written} sequences to {self.output_path}")
         return sequences_written
@@ -229,27 +241,3 @@ class Extractor:
             tracked_cells[cell_mask == cell_label] = track_id
 
         return tracked_cells
-
-    def _write_sequence(
-        self,
-        h5file: h5py.File,
-        row: AnalysisRow,
-        timelapse: np.ndarray,
-        nuclei_masks: np.ndarray,
-        cell_masks: np.ndarray,
-    ) -> None:
-        """Write sequence data to H5."""
-        fov_group = h5file.require_group(f"fov_{row.fov}")
-        cell_group = fov_group.require_group(f"cell_{row.cell}")
-        seq_group = cell_group.require_group("sequence_0")
-
-        seq_group.create_dataset("data", data=timelapse, compression="gzip")
-        seq_group.create_dataset("nuclei_masks", data=nuclei_masks, compression="gzip")
-        seq_group.create_dataset("cell_masks", data=cell_masks, compression="gzip")
-
-        channels = [f"channel_{i}" for i in range(timelapse.shape[1])]
-        seq_group.create_dataset("channels", data=np.array(channels, dtype="S"))
-
-        seq_group.attrs["t0"] = row.t0
-        seq_group.attrs["t1"] = row.t1
-        seq_group.attrs["bbox"] = np.array([row.x, row.y, row.w, row.h], dtype=np.int32)

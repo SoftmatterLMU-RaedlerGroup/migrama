@@ -1,22 +1,22 @@
-"""Convert TIFF files to H5 with segmentation and tracking."""
+"""Convert TIFF files to OME-Zarr with segmentation and tracking."""
 
 import logging
 from collections.abc import Callable
 from pathlib import Path
 
-import h5py
 import numpy as np
 import tifffile
 from skimage.filters import threshold_otsu
 
 from ..core import CellposeSegmenter, CellTracker
+from ..core.io import create_zarr_store, write_global_metadata, write_sequence
 from ..core.progress import ProgressEmitter
 
 logger = logging.getLogger(__name__)
 
 
 class Converter:
-    """Convert TIFF files to H5 with segmentation and tracking."""
+    """Convert TIFF files to OME-Zarr with segmentation and tracking."""
 
     def __init__(
         self,
@@ -33,7 +33,7 @@ class Converter:
         input_folder : str
             Path to folder containing TIFF files
         output_path : str
-            Output H5 file path
+            Output Zarr store path
         nuclei_channel : int
             Channel index for nuclei
         cell_channels : list[int] | None
@@ -56,7 +56,7 @@ class Converter:
         return self._progress.progress
 
     def convert(self, min_frames: int = 1, on_file_start: Callable | None = None) -> int:
-        """Convert TIFF files to H5.
+        """Convert TIFF files to OME-Zarr.
 
         Parameters
         ----------
@@ -76,47 +76,59 @@ class Converter:
 
         sequences_written = 0
 
-        with h5py.File(self.output_path, "w") as h5file:
-            h5file.attrs["input_folder"] = str(self.input_folder)
-            h5file.attrs["nuclei_channel"] = self.nuclei_channel
-            if self.cell_channels is not None:
-                h5file.attrs["cell_channels"] = self.cell_channels
-            h5file.attrs["merge_method"] = self.merge_method
+        root = create_zarr_store(self.output_path, overwrite=True)
+        write_global_metadata(
+            root,
+            cells_source=str(self.input_folder),
+            nuclei_channel=self.nuclei_channel,
+            cell_channels=self.cell_channels,
+            merge_method=self.merge_method,
+        )
 
-            for cell_idx, tiff_path in enumerate(tiff_paths):
-                timelapse = self._load_timelapse(tiff_path)
+        for cell_idx, tiff_path in enumerate(tiff_paths):
+            timelapse = self._load_timelapse(tiff_path)
 
-                n_frames = timelapse.shape[0]
-                if n_frames < min_frames:
-                    logger.info(f"Skipping {tiff_path.name}: only {n_frames} frames")
-                    continue
+            n_frames = timelapse.shape[0]
+            if n_frames < min_frames:
+                logger.info(f"Skipping {tiff_path.name}: only {n_frames} frames")
+                continue
 
-                if on_file_start:
-                    on_file_start(tiff_path.name)
+            if on_file_start:
+                on_file_start(tiff_path.name)
 
-                cell_masks = self._segment_timelapse(timelapse, tiff_path.name)
+            cell_masks = self._segment_timelapse(timelapse, tiff_path.name)
 
-                tracker = CellTracker()
-                n_frames = len(cell_masks)
-                self._progress.emit("tracking", "frame", 0, n_frames)
-                tracking_maps = tracker.track_frames(cell_masks)
-                self._progress.emit("tracking", "frame", n_frames, n_frames)
-                tracked_cell_masks = [
-                    tracker.get_tracked_mask(mask, track_map)
-                    for mask, track_map in zip(cell_masks, tracking_maps, strict=False)
-                ]
+            tracker = CellTracker()
+            n_frames = len(cell_masks)
+            self._progress.emit("tracking", "frame", 0, n_frames)
+            tracking_maps = tracker.track_frames(cell_masks)
+            self._progress.emit("tracking", "frame", n_frames, n_frames)
+            tracked_cell_masks = [
+                tracker.get_tracked_mask(mask, track_map)
+                for mask, track_map in zip(cell_masks, tracking_maps, strict=False)
+            ]
 
-                nuclei_masks = self._build_nuclei_masks(timelapse, tracked_cell_masks, tracking_maps, tiff_path.name)
+            nuclei_masks = self._build_nuclei_masks(timelapse, tracked_cell_masks, tracking_maps, tiff_path.name)
 
-                self._write_sequence(
-                    h5file,
-                    cell_idx,
-                    timelapse,
-                    np.stack(nuclei_masks),
-                    np.stack(tracked_cell_masks),
-                )
-                sequences_written += 1
-                logger.info(f"Processed {tiff_path.name} -> cell_{cell_idx}")
+            n_channels = timelapse.shape[1]
+            channels = [f"channel_{i}" for i in range(n_channels)]
+            dummy_bbox = np.array([-1, -1, -1, -1], dtype=np.int32)
+
+            write_sequence(
+                root,
+                fov_idx=0,
+                cell_idx=cell_idx,
+                seq_idx=0,
+                data=timelapse,
+                nuclei_masks=np.stack(nuclei_masks),
+                cell_masks=np.stack(tracked_cell_masks),
+                channels=channels,
+                t0=-1,
+                t1=-1,
+                bbox=dummy_bbox,
+            )
+            sequences_written += 1
+            logger.info(f"Processed {tiff_path.name} -> cell_{cell_idx}")
 
         logger.info(f"Saved {sequences_written} sequences to {self.output_path}")
         return sequences_written
@@ -209,29 +221,3 @@ class Converter:
             nuclei_masks.append(nuclei_mask)
             self._progress.emit("nuclei", "frame", frame_idx + 1, n_frames)
         return nuclei_masks
-
-    def _write_sequence(
-        self,
-        h5file: h5py.File,
-        cell_idx: int,
-        timelapse: np.ndarray,
-        nuclei_masks: np.ndarray,
-        cell_masks: np.ndarray,
-    ) -> None:
-        """Write sequence data to H5."""
-        fov_group = h5file.require_group("fov_0")
-        cell_group = fov_group.require_group(f"cell_{cell_idx}")
-        seq_group = cell_group.require_group("sequence_0")
-
-        seq_group.create_dataset("data", data=timelapse, compression="gzip")
-        seq_group.create_dataset("nuclei_masks", data=nuclei_masks, compression="gzip")
-        seq_group.create_dataset("cell_masks", data=cell_masks, compression="gzip")
-
-        n_channels = timelapse.shape[1]
-        channels = [f"channel_{i}" for i in range(n_channels)]
-        seq_group.create_dataset("channels", data=np.array(channels, dtype="S"))
-
-        dummy_bbox = np.array([-1, -1, -1, -1], dtype=np.int32)
-        seq_group.attrs["t0"] = -1
-        seq_group.attrs["t1"] = -1
-        seq_group.attrs["bbox"] = dummy_bbox
