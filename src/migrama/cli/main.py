@@ -657,9 +657,33 @@ def info(  # noqa: C901
         print_zarr_tree(root)
 
 
+
+@app.command()
+def save(
+    zarr_path: str = typer.Option(..., "--zarr", "-z", help="Path to input Zarr store"),
+    output: str = typer.Option(..., "--output", "-o", help="Output directory for TIFF files"),
+):
+    """Export zarr sequences to TIFF files.
+
+    Creates two files per sequence:
+    - fov_XXXX_cell_XXXX_data.tiff: Image data (T, C, H, W)
+    - fov_XXXX_cell_XXXX_mask.tiff: Masks (T, 2, H, W) where ch0=cell, ch1=nucleus
+    """
+    from pathlib import Path
+
+    from ..core.io.tiff_export import export_zarr_to_tiff
+
+    zarr_p = Path(zarr_path)
+    if not zarr_p.exists():
+        typer.echo(f"Error: Zarr store not found: {zarr_path}", err=True)
+        raise typer.Exit(1)
+
+    count = export_zarr_to_tiff(zarr_p, Path(output))
+    typer.echo(f"Saved {count} sequences to {output}")
+
 @app.command()
 def viewer():
-    """Launch the interactive NPY viewer."""
+    """Launch the interactive Zarr viewer."""
     from PySide6.QtWidgets import QApplication
 
     from ..viewer.ui.main_window import MainWindow
