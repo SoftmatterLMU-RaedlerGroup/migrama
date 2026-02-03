@@ -166,7 +166,10 @@ def average(
     log_level = logging.DEBUG if debug else logging.INFO
     logging.basicConfig(level=log_level, format="%(levelname)s - %(name)s - %(message)s")
 
+    from rich.progress import BarColumn, Progress, TaskID, TextColumn, TimeElapsedColumn
+
     from ..core.pattern import PatternAverager
+    from ..core.progress import ProgressEvent
 
     averager = PatternAverager(
         cells_path=cells,
@@ -175,8 +178,36 @@ def average(
         t1=t1,
         output_dir=output_dir,
     )
-    output_paths = averager.run()
-    typer.echo(f"Averaged {len(output_paths)} FOVs to {output_dir}")
+
+    progress = Progress(
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        TimeElapsedColumn(),
+        transient=True,
+    )
+    progress.start()
+
+    tasks: dict[str, TaskID] = {}
+
+    def handle_progress(event: ProgressEvent) -> None:
+        if event.state not in tasks:
+            tasks[event.state] = progress.add_task(
+                f"{event.state} ({event.iterator})",
+                total=event.total or 1,
+            )
+        task_id = tasks[event.state]
+        progress.update(task_id, completed=event.current)
+
+    averager.progress.connect(handle_progress)
+
+    try:
+        output_paths = averager.run()
+        progress.stop()
+        typer.echo(f"Averaged {len(output_paths)} FOVs to {output_dir}")
+    except Exception:
+        progress.stop()
+        raise
 
 
 @app.command()
@@ -479,8 +510,7 @@ def graph(
     input: str = typer.Option(..., "--input", "-i", help="Path to Zarr store with extracted data"),
     output: str = typer.Option(..., "--output", "-o", help="Output directory for plots"),
     fov: int = typer.Option(..., "--fov", help="FOV index"),
-    pattern: int = typer.Option(..., "--pattern", help="Pattern index"),
-    sequence: int = typer.Option(..., "--sequence", help="Sequence index"),
+    pattern: int = typer.Option(..., "--pattern", help="Pattern/cell index"),
     start_frame: int | None = typer.Option(None, "--start-frame", "-s", help="Starting frame (default: 0)"),
     end_frame: int | None = typer.Option(None, "--end-frame", "-e", help="Ending frame (exclusive, default: all)"),
     plot: bool = typer.Option(False, "--plot", help="Generate boundary visualization plots"),
@@ -507,8 +537,8 @@ def graph(
     loader = ZarrSegmentationLoader()
     tracker = BoundaryPixelTracker()
 
-    typer.echo(f"Loading sequence: FOV {fov}, Pattern {pattern}, Sequence {sequence}")
-    loaded_data = loader.load_cell_filter_data(input, fov, pattern, sequence, None)
+    typer.echo(f"Loading sequence: FOV {fov}, Pattern {pattern}")
+    loaded_data = loader.load_cell_filter_data(input, fov, pattern)
     segmentation_masks = np.asarray(loaded_data["segmentation_masks"])
     nuclei_masks = np.asarray(loaded_data["nuclei_masks"]) if loaded_data["nuclei_masks"] is not None else None
 

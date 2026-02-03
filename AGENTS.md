@@ -25,7 +25,7 @@ This is a monolithic Python package. Run commands from the repository root.
 - **migrama extract**: `migrama extract -c cells.nd2 --csv analysis.csv --cache ./cache.zarr -o extracted.zarr`
 - **migrama convert**: `migrama convert -i tiff_folder/ -o converted.zarr --nc 0 --cell-channels 1,2`
 - **migrama info**: `migrama info -i extracted.zarr`
-- **migrama graph**: `migrama graph -i extracted.zarr --fov 0 --pattern 0 --sequence 0 -o ./output --plot`
+- **migrama graph**: `migrama graph -i extracted.zarr --fov 0 --pattern 0 -o ./output --plot`
 - **migrama tension**: `migrama tension --mask xxx.npy`
 - **migrama viewer**: `migrama viewer`
 
