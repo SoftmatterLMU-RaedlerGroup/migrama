@@ -124,16 +124,22 @@ class Extractor:
             total_frames += n_frames
             logger.info(f"[{idx + 1}/{total}] FOV {row.fov}, cell {row.cell}: {n_frames} frames (t={row.t0}-{row.t1})")
 
-            logger.info("  Extracting timelapse...")
-            timelapse = self.cropper.extract(row.fov, row.cell, frames=(row.t0, row.t1 + 1))
-
-            # Load from cache ONLY if --cache provided (explicit opt-in)
+            # Try to load timelapse from cache first
+            timelapse = None
             cell_masks = None
             if self._cache is not None:
+                timelapse = self._load_cached_data(row.fov, row.cell, row.t0, row.t1)
                 cell_masks = self._load_cached_masks(row.fov, row.cell, row.t0, row.t1)
+                if timelapse is not None:
+                    logger.info(f"  Loaded {timelapse.shape[0]} frames from cache")
                 if cell_masks is not None:
                     logger.info(f"  Loaded {len(cell_masks)} masks from cache")
                     cached_frames += len(cell_masks)
+
+            # Fall back to loading from source file if not in cache
+            if timelapse is None:
+                logger.info(f"  Loading {n_frames} frames from source file...")
+                timelapse = self.cropper.extract(row.fov, row.cell, frames=(row.t0, row.t1 + 1))
 
             # If no cache or cache miss, segment
             if cell_masks is None:
@@ -200,15 +206,30 @@ class Extractor:
             return None
 
         try:
-            fov_key = f"fov{fov:03d}"
-            cell_key = f"cell{cell:03d}"
-            masks_array = self._cache[fov_key][cell_key]["cell_masks"]
+            masks_array = self._cache[f"fov/{fov}"][f"cell/{cell}"]["mask"]["cell"]
 
             # Extract the time range [t0:t1+1]
             masks_slice = masks_array[t0:t1 + 1]
             return [masks_slice[i] for i in range(masks_slice.shape[0])]
         except KeyError:
-            logger.debug(f"Cache miss: {fov_key}/{cell_key} not found")
+            logger.debug(f"Cache miss: fov/{fov}/cell/{cell} not found")
+            return None
+
+    def _load_cached_data(self, fov: int, cell: int, t0: int, t1: int) -> np.ndarray | None:
+        """Load timelapse data from cache for the given time range.
+
+        Returns None if cache is not available or data not found.
+        """
+        if self._cache is None:
+            return None
+
+        try:
+            data_array = self._cache[f"fov/{fov}"][f"cell/{cell}"]["data"]
+
+            # Extract the time range [t0:t1+1]
+            return data_array[t0:t1 + 1]
+        except KeyError:
+            logger.debug(f"Cache miss (data): fov/{fov}/cell/{cell} not found")
             return None
 
     @staticmethod
