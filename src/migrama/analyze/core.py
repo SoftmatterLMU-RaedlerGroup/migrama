@@ -268,7 +268,7 @@ class Analyzer:
 
                     masks_stack = np.stack(normalized_masks)
 
-                    cell_group = fov_group.create_group(f"cell{cell_idx:03d}")
+                    cell_group = fov_group.create_group(f"cell{bbox.cell:03d}")
                     cell_group.create_array(
                         "cell_masks",
                         data=masks_stack,
