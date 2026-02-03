@@ -157,12 +157,7 @@ def average(
     output_dir: str = typer.Option(".", "--output-dir", help="Output directory for averaged TIFFs"),
     debug: bool = typer.Option(False, "--debug"),
 ):
-    """Average time-lapse data to enhance pattern contrast.
-
-    Outputs one averaged TIFF per FOV (patterns_avg_fov_{fov}.tif) in the
-    specified output directory. Useful for detecting patterns from phase
-    contrast images without a dedicated pattern file.
-    """
+    """Average phase contrast time-lapse frames to generate pattern images when no dedicated patterns.nd2 was recorded."""
     log_level = logging.DEBUG if debug else logging.INFO
     logging.basicConfig(level=log_level, format="%(levelname)s - %(name)s - %(message)s")
 
