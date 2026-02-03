@@ -213,7 +213,7 @@ def analyze(
     csv: str = typer.Option(..., "--csv", help="Path to patterns CSV file"),
     cache: str | None = typer.Option(None, "--cache", help="Output cache.ome.zarr path for cell mask storage (optional)"),
     output: str = typer.Option(..., "--output", "-o", help="Output CSV file path"),
-    nc: int = typer.Option(..., "--nc", help="Channel index for nucleus (required)"),
+    nc: int | None = typer.Option(None, "--nc", help="Channel index for nucleus (default: 1)"),
     cc: str | None = typer.Option(None, "--cc", help="Comma-separated cell channel indices"),
     merge_method: str | None = typer.Option(None, "--merge-method", help="Channel merge method: 'add' or 'multiply'"),
     n_cells: int = typer.Option(..., "--n-cells", help="Target number of cells per pattern (required)"),
@@ -236,6 +236,9 @@ def analyze(
         if cc is None:
             typer.echo("Error: --cc is required when --merge-method is not 'none'", err=True)
             raise typer.Exit(1)
+
+    if nc is None:
+        nc = 1
 
     # Parse cc (optional, metadata only)
     cell_channels_list: list[int] | None = None
