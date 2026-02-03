@@ -8,8 +8,8 @@ from pathlib import Path
 import numpy as np
 
 from ..core import CellposeSegmenter, CellTracker
-from ..core.io import create_zarr_store, write_global_metadata, write_sequence
 from ..core.cell_source import CellFovSource
+from ..core.io import create_zarr_store, write_global_metadata, write_sequence
 from ..core.pattern import CellCropper
 
 logger = logging.getLogger(__name__)
@@ -84,8 +84,8 @@ class Extractor:
             self._cache = zarr.open(str(self.cache_path), mode='r')
             logger.info(f"Loaded mask cache from {self.cache_path}")
 
-    def extract(self, min_frames: int = 1) -> int:
-        """Extract sequences to OME-Zarr.
+    def extract(self, min_frames: int = 20) -> int:
+        """Extract sequences to Zarr.
 
         Parameters
         ----------
@@ -98,7 +98,13 @@ class Extractor:
             Number of sequences extracted
         """
         rows = self._load_analysis_rows(self.analysis_csv)
-        sequences_written = 0
+        # Filter valid rows upfront
+        valid_rows = [
+            row for row in rows
+            if row.t0 >= 0 and row.t1 >= row.t0 and (row.t1 - row.t0 + 1) >= min_frames
+        ]
+        total = len(valid_rows)
+        logger.info(f"Processing {total} sequences (from {len(rows)} rows, min_frames={min_frames})")
 
         root = create_zarr_store(self.output_path, overwrite=True)
         write_global_metadata(
@@ -109,26 +115,27 @@ class Extractor:
             merge_method=self.merge_method,
         )
 
-        for row in rows:
-            if row.t0 < 0 or row.t1 < row.t0:
-                continue
-
+        for idx, row in enumerate(valid_rows):
             n_frames = row.t1 - row.t0 + 1
-            if n_frames < min_frames:
-                continue
+            logger.info(f"[{idx + 1}/{total}] FOV {row.fov}, cell {row.cell}: {n_frames} frames (t={row.t0}-{row.t1})")
 
+            logger.info("  Extracting timelapse...")
             timelapse = self.cropper.extract(row.fov, row.cell, frames=(row.t0, row.t1 + 1))
 
             # Load from cache ONLY if --cache provided (explicit opt-in)
             cell_masks = None
             if self._cache is not None:
                 cell_masks = self._load_cached_masks(row.fov, row.cell, row.t0, row.t1)
+                if cell_masks is not None:
+                    logger.info(f"  Loaded {len(cell_masks)} masks from cache")
 
             # If no cache or cache miss, segment all channels
             if cell_masks is None:
+                logger.info(f"  Segmenting {n_frames} frames...")
                 cell_masks = self._segment_all_channels(timelapse)
 
             # Track CELLS (not nuclei) - cell-first tracking
+            logger.info("  Tracking cells...")
             tracker = CellTracker()
             tracking_maps = tracker.track_frames(cell_masks)
             tracked_cell_masks = [
@@ -137,6 +144,7 @@ class Extractor:
             ]
 
             # Derive nuclei by thresholding nuclear channel within each tracked cell
+            logger.info("  Deriving nuclei masks...")
             tracked_nuclei_masks = []
             for frame_idx, tracked_cell_mask in enumerate(tracked_cell_masks):
                 nuclear_image = timelapse[frame_idx, self.nuclei_channel]
@@ -146,11 +154,11 @@ class Extractor:
             channels = [f"channel_{i}" for i in range(timelapse.shape[1])]
             bbox = np.array([row.x, row.y, row.w, row.h], dtype=np.int32)
 
+            logger.info("  Writing to zarr...")
             write_sequence(
                 root,
                 fov_idx=row.fov,
                 cell_idx=row.cell,
-                seq_idx=0,
                 data=timelapse,
                 nuclei_masks=np.stack(tracked_nuclei_masks),
                 cell_masks=np.stack(tracked_cell_masks),
@@ -159,10 +167,9 @@ class Extractor:
                 t1=row.t1,
                 bbox=bbox,
             )
-            sequences_written += 1
 
-        logger.info(f"Saved {sequences_written} sequences to {self.output_path}")
-        return sequences_written
+        logger.info(f"Saved {total} sequences to {self.output_path}")
+        return total
 
     def _load_cached_masks(self, fov: int, cell: int, t0: int, t1: int) -> list[np.ndarray] | None:
         """Load cell masks from cache for the given time range.
