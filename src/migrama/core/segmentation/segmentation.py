@@ -44,9 +44,7 @@ def merge_channels(channels: list[np.ndarray], method: str = 'multiply') -> np.n
 
     # Merge channels
     if method == 'add':
-        merged = sum(normalized)
-        # Clamp to [0, 1] in case sum exceeds 1
-        merged = np.clip(merged, 0, 1)
+        merged = sum(normalized) / 2
     elif method == 'multiply':
         merged = np.prod(np.stack(normalized), axis=0)
     else:
@@ -81,7 +79,7 @@ class CellposeSegmenter:
         image: np.ndarray,
         nuclei_channel: int | None = None,
         cell_channels: list[int] | None = None,
-        merge_method: str = 'none',
+        merge_method: str | None = None,
     ) -> dict[str, np.ndarray]:
         """
         Segment a single image using Cellpose.
@@ -91,9 +89,9 @@ class CellposeSegmenter:
         image : np.ndarray
             Input image with shape (height, width) or (height, width, channels) or (channels, height, width)
         nuclei_channel : int | None
-            Channel index for nuclear channel. If None and merge_method != 'none', uses first channel.
+            Channel index for nuclear channel. If None and merge_method is not None, uses first channel.
         cell_channels : list[int] | None
-            Channel indices for cell channels to merge. If None and merge_method != 'none', uses all channels except nuclei_channel.
+            Channel indices for cell channels to merge. If None and merge_method is not None, uses all channels except nuclei_channel.
         merge_method : str
             Merge method: 'add', 'multiply', or 'none'. If 'none', passes all channels directly to cellpose.
 
@@ -108,7 +106,7 @@ class CellposeSegmenter:
         # Handle different input formats
         if image.ndim == 2:
             # Single channel: (H, W)
-            if merge_method != 'none':
+            if merge_method is not None:
                 raise ValueError("Cannot merge channels on 2D image. Image must have multiple channels.")
             logger.debug(f"Segmenting single-channel image with shape {image.shape}")
             cellpose_input = image
@@ -121,7 +119,7 @@ class CellposeSegmenter:
                 image = np.transpose(image, (1, 2, 0))
                 logger.debug(f"Transposed image from (C, H, W) to (H, W, C): {image.shape}")
 
-            if merge_method == 'none':
+            if merge_method is None:
                 # Pass all channels directly
                 logger.debug(f"Segmenting image with all channels (shape {image.shape})")
                 cellpose_input = image

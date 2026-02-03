@@ -24,7 +24,7 @@ class Converter:
         output_path: str,
         nuclei_channel: int = 0,
         cell_channels: list[int] | None = None,
-        merge_method: str = 'none',
+        merge_method: str | None = None,
     ) -> None:
         """Initialize converter.
 
@@ -162,7 +162,7 @@ class Converter:
 
             # Determine cell_channels to use
             cell_channels_to_use = self.cell_channels
-            if cell_channels_to_use is None and self.merge_method != 'none':
+            if cell_channels_to_use is None and self.merge_method is not None:
                 # Use all channels except nuclei_channel
                 n_channels = frame_data.shape[0]
                 cell_channels_to_use = [i for i in range(n_channels) if i != self.nuclei_channel]
@@ -176,8 +176,8 @@ class Converter:
             # Segment with appropriate method
             result = self.segmenter.segment_image(
                 frame_data_hwc,
-                nuclei_channel=self.nuclei_channel if self.merge_method != 'none' else None,
-                cell_channels=cell_channels_to_use if self.merge_method != 'none' else None,
+                nuclei_channel=self.nuclei_channel if self.merge_method is not None else None,
+                cell_channels=cell_channels_to_use if self.merge_method is not None else None,
                 merge_method=self.merge_method,
             )
             masks.append(result["masks"])

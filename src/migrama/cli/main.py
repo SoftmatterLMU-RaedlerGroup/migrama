@@ -213,9 +213,9 @@ def analyze(
     csv: str = typer.Option(..., "--csv", help="Path to patterns CSV file"),
     cache: str | None = typer.Option(None, "--cache", help="Output cache.ome.zarr path for cell mask storage (optional)"),
     output: str = typer.Option(..., "--output", "-o", help="Output CSV file path"),
-    nuclei_channel: int = typer.Option(1, "--nc", help="Channel index for nuclei (stored for extract step)"),
-    cell_channels: str | None = typer.Option(None, "--cc", help="Comma-separated cell channel indices (metadata only, not used for segmentation)"),
-    merge_method: str = typer.Option("none", "--merge-method", help="Channel merge method (metadata only, not used)"),
+    nc: int | None = typer.Option(None, "--nc", help="Channel index for nucleus"),
+    cc: str | None = typer.Option(None, "--cc", help="Comma-separated cell channel indices"),
+    merge_method: str | None = typer.Option(None, "--merge-method", help="Channel merge method: 'add' or 'multiply'"),
     n_cells: int = typer.Option(..., "--n-cells", help="Target number of cells per pattern (required)"),
     allowed_gap: int = typer.Option(6, "--allowed-gap", help="Maximum consecutive non-target frames to bridge over"),
     debug: bool = typer.Option(False, "--debug"),
@@ -228,13 +228,22 @@ def analyze(
     log_level = logging.DEBUG if debug else logging.INFO
     logging.basicConfig(level=log_level, format="%(levelname)s - %(name)s - %(message)s")
 
-    # Parse cell_channels (optional, metadata only)
+    # Validate channel args required when merge_method is specified
+    if merge_method is not None:
+        if nc is None:
+            typer.echo("Error: --nc is required when --merge-method is not 'none'", err=True)
+            raise typer.Exit(1)
+        if cc is None:
+            typer.echo("Error: --cc is required when --merge-method is not 'none'", err=True)
+            raise typer.Exit(1)
+
+    # Parse cc (optional, metadata only)
     cell_channels_list: list[int] | None = None
-    if cell_channels is not None:
+    if cc is not None:
         try:
-            cell_channels_list = [int(x.strip()) for x in cell_channels.split(",")]
+            cell_channels_list = [int(x.strip()) for x in cc.split(",")]
         except ValueError:
-            typer.echo(f"Error: Invalid --cc format: {cell_channels}. Expected comma-separated integers (e.g., '0' or '1,2')", err=True)
+            typer.echo(f"Error: Invalid --cc format: {cc}. Expected comma-separated integers (e.g., '0' or '1,2')", err=True)
             raise typer.Exit(1) from None
 
     from ..analyze import Analyzer
@@ -245,7 +254,7 @@ def analyze(
         source=source,
         csv_path=csv,
         cache_path=cache,
-        nuclei_channel=nuclei_channel,
+        nuclei_channel=nc,
         cell_channels=cell_channels_list,
         merge_method=merge_method,
         n_cells=n_cells,
@@ -264,9 +273,9 @@ def extract(
     ),
     csv: str = typer.Option(..., "--csv", help="Path to analysis CSV file"),
     output: str = typer.Option(..., "--output", "-o", help="Output Zarr store path"),
-    nuclei_channel: int = typer.Option(1, "--nc", help="Channel index for nuclei (used to derive nuclei within cells)"),
-    cell_channels: str | None = typer.Option(None, "--cc", help="Comma-separated cell channel indices (metadata only)"),
-    merge_method: str = typer.Option("none", "--merge-method", help="Channel merge method (metadata only)"),
+    nc: int | None = typer.Option(None, "--nc", help="Channel index for nucleus"),
+    cc: str | None = typer.Option(None, "--cc", help="Comma-separated cell channel indices"),
+    merge_method: str | None = typer.Option(None, "--merge-method", help="Channel merge method: 'add' or 'multiply'"),
     cache: str | None = typer.Option(None, "--cache", help="Path to cache.ome.zarr with pre-computed cell masks (explicit opt-in)"),
     min_frames: int = typer.Option(20, "--min-frames", help="Minimum frames per sequence"),
     debug: bool = typer.Option(False, "--debug"),
@@ -281,19 +290,28 @@ def extract(
     log_level = logging.DEBUG if debug else logging.INFO
     logging.basicConfig(level=log_level, format="%(levelname)s - %(name)s - %(message)s")
 
-    # Parse cell_channels (optional, metadata only)
-    cell_channels_list: list[int] | None = None
-    if cell_channels is not None:
-        try:
-            cell_channels_list = [int(x.strip()) for x in cell_channels.split(",")]
-        except ValueError:
-            typer.echo(f"Error: Invalid --cc format: {cell_channels}. Expected comma-separated integers (e.g., '0' or '1,2')", err=True)
-            raise typer.Exit(1) from None
-
     # Validate merge_method
-    if merge_method not in ('add', 'multiply', 'none'):
-        typer.echo(f"Error: Invalid --merge-method: {merge_method}. Must be 'add', 'multiply', or 'none'", err=True)
+    if merge_method is not None and merge_method not in ('add', 'multiply'):
+        typer.echo(f"Error: Invalid --merge-method: {merge_method}. Must be 'add' or 'multiply'", err=True)
         raise typer.Exit(1)
+
+    # Validate channel args required when merge_method is specified
+    if merge_method is not None:
+        if nc is None:
+            typer.echo("Error: --nc is required when --merge-method is not 'none'", err=True)
+            raise typer.Exit(1)
+        if cc is None:
+            typer.echo("Error: --cc is required when --merge-method is not 'none'", err=True)
+            raise typer.Exit(1)
+
+    # Parse cc (optional, metadata only)
+    cell_channels_list: list[int] | None = None
+    if cc is not None:
+        try:
+            cell_channels_list = [int(x.strip()) for x in cc.split(",")]
+        except ValueError:
+            typer.echo(f"Error: Invalid --cc format: {cc}. Expected comma-separated integers (e.g., '0' or '1,2')", err=True)
+            raise typer.Exit(1) from None
 
     from ..extract import Extractor
 
@@ -303,7 +321,7 @@ def extract(
         source=source,
         analysis_csv=csv,
         output_path=output,
-        nuclei_channel=nuclei_channel,
+        nuclei_channel=nc,
         cell_channels=cell_channels_list,
         merge_method=merge_method,
         cache_path=cache,
@@ -316,9 +334,9 @@ def extract(
 def convert(
     input_folder: str = typer.Option(..., "--input", "-i", help="Path to folder with TIFF files"),
     output: str = typer.Option("./converted.zarr", "--output", "-o", help="Output Zarr store path"),
-    nuclei_channel: int = typer.Option(0, "--nc", help="Channel index for nuclei"),
-    cell_channels: str | None = typer.Option(None, "--cell-channels", "--cc", help="Comma-separated cell channel indices (e.g., '1,2')"),
-    merge_method: str = typer.Option("none", "--merge-method", help="Channel merge method: 'add', 'multiply', or 'none'"),
+    nc: int | None = typer.Option(None, "--nc", help="Channel index for nucleus"),
+    cc: str | None = typer.Option(None, "--cc", help="Comma-separated cell channel indices"),
+    merge_method: str | None = typer.Option(None, "--merge-method", help="Channel merge method: 'add' or 'multiply'"),
     min_frames: int = typer.Option(20, "--min-frames", help="Minimum frames per sequence"),
     debug: bool = typer.Option(False, "--debug"),
 ):
@@ -326,19 +344,28 @@ def convert(
     log_level = logging.DEBUG if debug else logging.INFO
     logging.basicConfig(level=log_level, format="%(levelname)s - %(name)s - %(message)s")
 
-    # Parse cell_channels if provided
-    cell_channels_list: list[int] | None = None
-    if cell_channels is not None:
-        try:
-            cell_channels_list = [int(x.strip()) for x in cell_channels.split(",")]
-        except ValueError:
-            typer.echo(f"Error: Invalid --cell-channels format: {cell_channels}. Expected comma-separated integers (e.g., '1,2')", err=True)
+    # Validate merge_method
+    if merge_method is not None and merge_method not in ('add', 'multiply'):
+        typer.echo(f"Error: Invalid --merge-method: {merge_method}. Must be 'add' or 'multiply'", err=True)
+        raise typer.Exit(1)
+
+    # Validate channel args required when merge_method is specified
+    if merge_method is not None:
+        if nc is None:
+            typer.echo("Error: --nc is required when --merge-method is not 'none'", err=True)
+            raise typer.Exit(1)
+        if cc is None:
+            typer.echo("Error: --cc is required when --merge-method is not 'none'", err=True)
             raise typer.Exit(1)
 
-    # Validate merge_method
-    if merge_method not in ('add', 'multiply', 'none'):
-        typer.echo(f"Error: Invalid --merge-method: {merge_method}. Must be 'add', 'multiply', or 'none'", err=True)
-        raise typer.Exit(1)
+    # Parse cc if provided
+    cell_channels_list: list[int] | None = None
+    if cc is not None:
+        try:
+            cell_channels_list = [int(x.strip()) for x in cc.split(",")]
+        except ValueError:
+            typer.echo(f"Error: Invalid --cc format: {cc}. Expected comma-separated integers (e.g., '1,2')", err=True)
+            raise typer.Exit(1) from None
 
     from ..convert import Converter
     from ..core.progress import ProgressEvent
@@ -346,7 +373,7 @@ def convert(
     converter = Converter(
         input_folder=input_folder,
         output_path=output,
-        nuclei_channel=nuclei_channel,
+        nuclei_channel=nc,
         cell_channels=cell_channels_list,
         merge_method=merge_method,
     )
