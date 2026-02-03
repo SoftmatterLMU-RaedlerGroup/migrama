@@ -39,7 +39,7 @@ class Extractor:
         output_path: str,
         nuclei_channel: int = 1,
         cell_channels: list[int] | None = None,
-        merge_method: str = 'none',
+        merge_method: str | None = None,
         cache_path: str | None = None,
     ) -> None:
         """Initialize extractor.
@@ -129,10 +129,13 @@ class Extractor:
                 if cell_masks is not None:
                     logger.info(f"  Loaded {len(cell_masks)} masks from cache")
 
-            # If no cache or cache miss, segment all channels
+            # If no cache or cache miss, segment
             if cell_masks is None:
                 logger.info(f"  Segmenting {n_frames} frames...")
-                cell_masks = self._segment_all_channels(timelapse)
+                if self.merge_method is None:
+                    cell_masks = self._segment_all_channels(timelapse)
+                else:
+                    cell_masks = self._segment_cells_merged(timelapse)
 
             # Track CELLS (not nuclei) - cell-first tracking
             logger.info("  Tracking cells...")
@@ -238,7 +241,7 @@ class Extractor:
         for frame_idx in range(timelapse.shape[0]):
             frame = timelapse[frame_idx]  # (C, H, W)
             frame_hwc = np.transpose(frame, (1, 2, 0))  # (H, W, C)
-            result = self.segmenter.segment_image(frame_hwc, merge_method='none')
+            result = self.segmenter.segment_image(frame_hwc, merge_method=None)
             masks.append(result["masks"])
         return masks
 

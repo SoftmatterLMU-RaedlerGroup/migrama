@@ -38,7 +38,7 @@ def write_global_metadata(
     cells_source: str,
     nuclei_channel: int,
     cell_channels: list[int] | None,
-    merge_method: str,
+    merge_method: str | None,
 ) -> None:
     """Write global metadata to zarr root.
 
@@ -52,8 +52,8 @@ def write_global_metadata(
         Channel index for nuclei
     cell_channels : list[int] | None
         Channel indices for cell segmentation
-    merge_method : str
-        Merge method: 'add', 'multiply', or 'none'
+    merge_method : str | None
+        Merge method: 'add' or 'multiply', or None for no merging
     """
     root.attrs["migrama"] = {
         "version": MIGRAMA_VERSION,

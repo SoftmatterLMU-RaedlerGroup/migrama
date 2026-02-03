@@ -36,7 +36,7 @@ class CellposeCounter:
         self,
         nuclei_channel: int | None = None,
         cell_channels: list[int] | None = None,
-        merge_method: str = 'none',
+        merge_method: str | None = None,
     ):
         """Initialize the Cellpose counter.
 

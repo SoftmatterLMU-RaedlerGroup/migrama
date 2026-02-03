@@ -111,7 +111,7 @@ class Analyzer:
         cache_path: str | None = None,
         nuclei_channel: int = 1,
         cell_channels: list[int] | None = None,
-        merge_method: str = 'none',
+        merge_method: str | None = None,
         n_cells: int = 4,
         allowed_gap: int = 6,
     ) -> None:
@@ -150,11 +150,11 @@ class Analyzer:
             bboxes_csv=str(self.csv_path),
             nuclei_channel=nuclei_channel,
         )
-        # Use all channels for cell segmentation (cell-first approach)
+        # Use configured channels for cell segmentation
         self.counter = CellposeCounter(
-            nuclei_channel=None,
-            cell_channels=None,
-            merge_method='none',
+            nuclei_channel=self.nuclei_channel if self.merge_method is not None else None,
+            cell_channels=self.cell_channels if self.merge_method is not None else None,
+            merge_method=self.merge_method,
         )
 
     def analyze(self, output_path: str) -> list[AnalysisRecord]:
