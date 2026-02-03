@@ -119,29 +119,29 @@ class Extractor:
 
             timelapse = self.cropper.extract(row.fov, row.cell, frames=(row.t0, row.t1 + 1))
 
-            # Segment nuclei (always needed for tracking)
-            nuclei_masks = self._segment_channel(timelapse, self.nuclei_channel)
+            # Load from cache ONLY if --cache provided (explicit opt-in)
+            cell_masks = None
+            if self._cache is not None:
+                cell_masks = self._load_cached_masks(row.fov, row.cell, row.t0, row.t1)
 
-            # Try to load cell masks from cache, otherwise segment
-            cell_masks = self._load_cached_masks(row.fov, row.cell, row.t0, row.t1)
+            # If no cache or cache miss, segment all channels
             if cell_masks is None:
-                # Cache miss - segment cells
-                if self.merge_method == 'none':
-                    cell_masks = self._segment_channel(timelapse, self.cell_channels[0])
-                else:
-                    cell_masks = self._segment_cells_merged(timelapse)
+                cell_masks = self._segment_all_channels(timelapse)
 
+            # Track CELLS (not nuclei) - cell-first tracking
             tracker = CellTracker()
-            tracking_maps = tracker.track_frames(nuclei_masks)
-            tracked_nuclei_masks = [
+            tracking_maps = tracker.track_frames(cell_masks)
+            tracked_cell_masks = [
                 tracker.get_tracked_mask(mask, track_map)
-                for mask, track_map in zip(nuclei_masks, tracking_maps, strict=False)
+                for mask, track_map in zip(cell_masks, tracking_maps, strict=False)
             ]
 
-            tracked_cell_masks = [
-                self._map_cells_to_tracks(cell_mask, tracked_nuclei_mask)
-                for cell_mask, tracked_nuclei_mask in zip(cell_masks, tracked_nuclei_masks, strict=False)
-            ]
+            # Derive nuclei by thresholding nuclear channel within each tracked cell
+            tracked_nuclei_masks = []
+            for frame_idx, tracked_cell_mask in enumerate(tracked_cell_masks):
+                nuclear_image = timelapse[frame_idx, self.nuclei_channel]
+                nuclei_mask = self._derive_nuclei(tracked_cell_mask, nuclear_image)
+                tracked_nuclei_masks.append(nuclei_mask)
 
             channels = [f"channel_{i}" for i in range(timelapse.shape[1])]
             bbox = np.array([row.x, row.y, row.w, row.h], dtype=np.int32)
@@ -214,6 +214,27 @@ class Extractor:
             masks.append(result["masks"])
         return masks
 
+    def _segment_all_channels(self, timelapse: np.ndarray) -> list[np.ndarray]:
+        """Segment using all channels passed directly to Cellpose.
+
+        Parameters
+        ----------
+        timelapse : np.ndarray
+            Timelapse array with shape (T, C, H, W)
+
+        Returns
+        -------
+        list[np.ndarray]
+            List of cell masks (2D arrays), one per frame
+        """
+        masks = []
+        for frame_idx in range(timelapse.shape[0]):
+            frame = timelapse[frame_idx]  # (C, H, W)
+            frame_hwc = np.transpose(frame, (1, 2, 0))  # (H, W, C)
+            result = self.segmenter.segment_image(frame_hwc, merge_method='none')
+            masks.append(result["masks"])
+        return masks
+
     def _segment_cells_merged(self, timelapse: np.ndarray) -> list[np.ndarray]:
         """Segment cells using 2-channel approach (nuclear + merged cell channels).
 
@@ -249,20 +270,47 @@ class Extractor:
 
         return cell_masks
 
-    @staticmethod
-    def _map_cells_to_tracks(cell_mask: np.ndarray, tracked_nuclei_mask: np.ndarray) -> np.ndarray:
-        """Assign cell labels to tracked nuclei IDs by overlap."""
-        tracked_cells = np.zeros_like(cell_mask, dtype=np.int32)
-        cell_labels = np.unique(cell_mask)
-        cell_labels = cell_labels[cell_labels != 0]
+    def _derive_nuclei(
+        self,
+        tracked_cell_mask: np.ndarray,
+        nuclear_image: np.ndarray,
+    ) -> np.ndarray:
+        """Derive nuclei by Otsu thresholding nuclear channel within each cell.
 
-        for cell_label in cell_labels:
-            overlap_ids = tracked_nuclei_mask[cell_mask == cell_label]
-            overlap_ids = overlap_ids[overlap_ids != 0]
-            if overlap_ids.size == 0:
+        Parameters
+        ----------
+        tracked_cell_mask : np.ndarray
+            Cell mask with track IDs (2D array)
+        nuclear_image : np.ndarray
+            Nuclear channel image (2D array)
+
+        Returns
+        -------
+        np.ndarray
+            Nuclei mask with same track IDs as cells
+        """
+        from skimage.filters import threshold_otsu
+
+        nuclei_mask = np.zeros_like(tracked_cell_mask)
+
+        for track_id in np.unique(tracked_cell_mask):
+            if track_id == 0:
                 continue
-            unique_ids, counts = np.unique(overlap_ids, return_counts=True)
-            track_id = int(unique_ids[np.argmax(counts)])
-            tracked_cells[cell_mask == cell_label] = track_id
 
-        return tracked_cells
+            # Extract nuclear channel within this cell
+            cell_region = tracked_cell_mask == track_id
+            nuclear_in_cell = nuclear_image[cell_region]
+
+            if nuclear_in_cell.size == 0:
+                continue
+
+            # Otsu threshold within this cell
+            try:
+                threshold = threshold_otsu(nuclear_in_cell)
+                nuclei_pixels = (nuclear_image > threshold) & cell_region
+                nuclei_mask[nuclei_pixels] = track_id
+            except ValueError:
+                # Constant intensity - no nucleus detected
+                pass
+
+        return nuclei_mask

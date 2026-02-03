@@ -165,20 +165,32 @@ class PatternDetector:
         logger.debug(f"FOV {fov_idx}: detected {len(records)} patterns")
         return records
 
-    def detect_all(self) -> list[PatternRecord]:
-        """Detect patterns in all FOVs.
+    def detect_all(self, fov_filter: list[int] | None = None) -> list[PatternRecord]:
+        """Detect patterns in all FOVs, optionally filtering to specific FOVs.
+
+        Parameters
+        ----------
+        fov_filter : list[int] | None
+            If provided, only process these FOV indices. Default: all FOVs.
 
         Returns
         -------
         list[PatternRecord]
-            All detected patterns across all FOVs
+            All detected patterns across processed FOVs
         """
         all_records = []
-        for fov_idx in range(self.n_fovs):
+        fovs_to_process = fov_filter if fov_filter else list(range(self.n_fovs))
+        n_processed = 0
+
+        for fov_idx in fovs_to_process:
+            if fov_idx < 0 or fov_idx >= self.n_fovs:
+                logger.warning(f"Skipping FOV {fov_idx}: out of range (0-{self.n_fovs - 1})")
+                continue
             records = self.detect_fov(fov_idx)
             all_records.extend(records)
+            n_processed += 1
 
-        logger.info(f"Detected {len(all_records)} patterns across {self.n_fovs} FOVs")
+        logger.info(f"Detected {len(all_records)} patterns across {n_processed} FOVs")
         return all_records
 
     def save_csv(self, records: list[PatternRecord], output_path: str | Path) -> None:
