@@ -193,7 +193,8 @@ class Analyzer:
             logger.info(f"Analyzing FOV {fov_idx}: {n_patterns} patterns × {n_frames} frames")
 
             # Create FOV group in cache if caching is enabled
-            fov_group = cache_store.create_group(f"fov{fov_idx:03d}") if cache_store else None
+            # Note: use 'is not None' because zarr v3 groups evaluate to False when empty
+            fov_group = cache_store.create_group(f"fov{fov_idx:03d}") if cache_store is not None else None
 
             # Initialize pattern tracker for progressive reduction
             tracker = PatternTracker(n_patterns, zero_threshold=3)
