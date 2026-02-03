@@ -68,18 +68,17 @@ def create_cell_source(path: str):
 @app.command()
 def pattern(
     patterns: str = typer.Option(
-        ..., "--patterns", "-p", help="Path to patterns file (.nd2 or .tif/.tiff)"
+        ..., "--patterns", "-p", help="Path to patterns file (.nd2) or folder of TIFFs"
     ),
     output: str = typer.Option(..., "--output", "-o", help="Output CSV file path"),
-    avg: bool = typer.Option(False, "--avg", help="Interpret --patterns as per-FOV TIFF file path"),
     fovs: str = typer.Option(..., "--fovs", help="FOVs to process: 'all' or ranges like '1,3-5,8' (required)"),
     plot: str | None = typer.Option(None, "--plot", help="Output folder for bbox overlay plots (one PNG per FOV)"),
     debug: bool = typer.Option(False, "--debug"),
 ):
     """Detect micropatterns and save bounding boxes to CSV.
 
-    Use -p/--patterns for dedicated pattern files, or with --avg for
-    pre-averaged TIFFs. Output CSV format: cell,fov,x,y,w,h
+    Accepts either an ND2 file or a folder of pre-averaged TIFFs (auto-detected).
+    Output CSV format: cell,fov,x,y,w,h
 
     Use --plot to generate visualization of detected bboxes overlaid on
     the pattern images (one PNG per FOV).
@@ -87,15 +86,13 @@ def pattern(
     log_level = logging.DEBUG if debug else logging.INFO
     logging.basicConfig(level=log_level, format="%(levelname)s - %(name)s - %(message)s")
 
-    if avg:
-        patterns_path = Path(patterns)
-        if not patterns_path.exists():
-            typer.echo(f"Error: Path does not exist: {patterns}", err=True)
-            raise typer.Exit(1)
-        if not patterns_path.is_dir():
-            typer.echo("Error: --avg requires a folder, not a file", err=True)
-            raise typer.Exit(1)
+    patterns_path = Path(patterns)
+    if not patterns_path.exists():
+        typer.echo(f"Error: Path does not exist: {patterns}", err=True)
+        raise typer.Exit(1)
 
+    # Auto-detect source type based on path
+    if patterns_path.is_dir():
         from ..core.pattern.source import TiffPatternFovSource
 
         source = TiffPatternFovSource(patterns_path)
