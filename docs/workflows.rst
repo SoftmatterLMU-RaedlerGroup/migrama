@@ -59,6 +59,12 @@ This workflow demonstrates the full Migrama pipeline using cell-first tracking.
      --fov 0 --pattern 0 --sequence 0 \
      --plot
 
+   # Step 5: Export to TIFF (optional)
+   echo "Step 5: Exporting to TIFF..."
+   migrama save \
+     --zarr $OUTPUT_DIR/extracted.zarr \
+     --output $OUTPUT_DIR/tiffs/
+
    echo "Pipeline complete!"
 
 Python API Workflow

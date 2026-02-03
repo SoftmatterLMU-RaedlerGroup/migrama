@@ -121,6 +121,22 @@ Launch the interactive viewer:
 
 Use the GUI to navigate frames and inspect data.
 
+Step 6: Export to TIFF (Optional)
+---------------------------------
+
+Export Zarr sequences to TIFF files for use with other tools:
+
+.. code-block:: bash
+
+   migrama save \
+     --zarr ./extracted.zarr \
+     --output ./tiff_exports/
+
+Output files per sequence:
+
+- ``fov_XXXX_cell_XXXX_data.tiff``: Image data (T, C, H, W)
+- ``fov_XXXX_cell_XXXX_mask.tiff``: Masks (T, 2, H, W) where ch0=cell, ch1=nucleus
+
 Complete Example
 ----------------
 
@@ -157,6 +173,11 @@ Complete Example
      --output results/boundaries \
      --fov 0 --pattern 0 --sequence 0 \
      --plot
+
+   # 5. Export to TIFF (optional)
+   migrama save \
+     --zarr results/extracted.zarr \
+     --output results/tiffs/
 
 Tips and Best Practices
 -----------------------
