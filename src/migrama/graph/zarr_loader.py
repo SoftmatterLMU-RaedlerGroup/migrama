@@ -1,4 +1,4 @@
-"""OME-Zarr data loader for graph analysis."""
+"""Zarr data loader for graph analysis."""
 
 import logging
 from pathlib import Path
@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 class ZarrSegmentationLoader:
-    """Load segmentation masks from migrama OME-Zarr stores."""
+    """Load segmentation masks from migrama Zarr stores."""
 
     def __init__(self) -> None:
         """Initialize the loader."""
@@ -21,7 +21,6 @@ class ZarrSegmentationLoader:
         zarr_path: str,
         fov_idx: int,
         pattern_idx: int,
-        seq_idx: int,
         yaml_path: str | None = None,
     ) -> dict[str, object]:
         """Load extracted data and segmentation masks from Zarr.
@@ -34,8 +33,6 @@ class ZarrSegmentationLoader:
             Field of view index
         pattern_idx : int
             Pattern/cell index
-        seq_idx : int
-            Sequence index
         yaml_path : str | None
             Optional path to YAML metadata file
 
@@ -46,35 +43,28 @@ class ZarrSegmentationLoader:
             metadata, channels, sequence_metadata
         """
         root = zarr.open(zarr_path, mode="r")
-        seq_path = f"fov_{fov_idx}/cell_{pattern_idx}/{seq_idx}"
-        labels_path = f"fov_{fov_idx}/cell_{pattern_idx}/labels/{seq_idx}"
+        cell_path = f"fov/{fov_idx}/cell/{pattern_idx}"
 
-        if seq_path not in root:
-            raise ValueError(f"Sequence not found: {seq_path}")
+        if cell_path not in root:
+            raise ValueError(f"Sequence not found: {cell_path}")
 
-        seq_group = root[seq_path]
+        cell_group = root[cell_path]
 
         # Load image data
-        data = seq_group["data"][...]
+        data = cell_group["data"][...]
 
-        # Load cell masks from labels group
-        labels_group = root[labels_path]
-        segmentation_masks = labels_group["cell_masks"][...]
+        # Load masks from mask group
+        mask_group = cell_group["mask"]
+        segmentation_masks = mask_group["cell"][...]
 
         # Load nuclei masks if present
         nuclei_masks = None
-        if "nuclei_masks" in labels_group:
-            nuclei_masks = labels_group["nuclei_masks"][...]
-
-        # Load channel names from OMERO metadata
-        channels = None
-        if "omero" in seq_group.attrs:
-            omero = seq_group.attrs["omero"]
-            if "channels" in omero:
-                channels = [ch.get("label", f"channel_{i}") for i, ch in enumerate(omero["channels"])]
+        if "nucleus" in mask_group:
+            nuclei_masks = mask_group["nucleus"][...]
 
         # Load migrama-specific metadata
-        migrama_meta = seq_group.attrs.get("migrama", {})
+        migrama_meta = cell_group.attrs.get("migrama", {})
+        channels = migrama_meta.get("channels")
         metadata = {
             "t0": migrama_meta.get("t0", -1),
             "t1": migrama_meta.get("t1", -1),
@@ -110,35 +100,37 @@ class ZarrSegmentationLoader:
         Returns
         -------
         list[dict[str, int]]
-            List of dictionaries with fov_idx, pattern_idx, seq_idx
+            List of dictionaries with fov_idx, pattern_idx
         """
         sequences: list[dict[str, int]] = []
         root = zarr.open(zarr_path, mode="r")
 
-        for fov_key in root.keys():
-            if not fov_key.startswith("fov_"):
+        # New structure: fov/{i}/cell/{j}/
+        if "fov" not in root:
+            return sequences
+
+        fov_group = root["fov"]
+        for fov_idx_key in fov_group.keys():
+            if not fov_idx_key.isdigit():
                 continue
-            fov_idx = int(fov_key.split("_")[1])
+            fov_idx = int(fov_idx_key)
 
-            for cell_key in root[fov_key].keys():
-                if not cell_key.startswith("cell_"):
+            fov_subgroup = fov_group[fov_idx_key]
+            if "cell" not in fov_subgroup:
+                continue
+
+            cell_group = fov_subgroup["cell"]
+            for cell_idx_key in cell_group.keys():
+                if not cell_idx_key.isdigit():
                     continue
-                cell_idx = int(cell_key.split("_")[1])
+                cell_idx = int(cell_idx_key)
 
-                # Sequence indices are now numeric keys (0, 1, 2, ...)
-                for seq_key in root[fov_key][cell_key].keys():
-                    # Skip non-numeric keys like "labels"
-                    if not seq_key.isdigit():
-                        continue
-                    seq_idx = int(seq_key)
-
-                    sequences.append(
-                        {
-                            "fov_idx": fov_idx,
-                            "pattern_idx": cell_idx,
-                            "seq_idx": seq_idx,
-                        }
-                    )
+                sequences.append(
+                    {
+                        "fov_idx": fov_idx,
+                        "pattern_idx": cell_idx,
+                    }
+                )
 
         return sequences
 
@@ -172,7 +164,6 @@ class ZarrSegmentationLoader:
                 zarr_path,
                 first_seq["fov_idx"],
                 first_seq["pattern_idx"],
-                first_seq["seq_idx"],
                 yaml_path,
             )["data"]
 

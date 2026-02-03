@@ -1,4 +1,4 @@
-"""Convert TIFF files to OME-Zarr with segmentation and tracking."""
+"""Convert TIFF files to Zarr with segmentation and tracking."""
 
 import logging
 from collections.abc import Callable
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 class Converter:
-    """Convert TIFF files to OME-Zarr with segmentation and tracking."""
+    """Convert TIFF files to Zarr with segmentation and tracking."""
 
     def __init__(
         self,
@@ -55,8 +55,8 @@ class Converter:
         """Get the progress signal for connecting callbacks."""
         return self._progress.progress
 
-    def convert(self, min_frames: int = 1, on_file_start: Callable | None = None) -> int:
-        """Convert TIFF files to OME-Zarr.
+    def convert(self, min_frames: int = 20, on_file_start: Callable | None = None) -> int:
+        """Convert TIFF files to Zarr.
 
         Parameters
         ----------
@@ -118,7 +118,6 @@ class Converter:
                 root,
                 fov_idx=0,
                 cell_idx=cell_idx,
-                seq_idx=0,
                 data=timelapse,
                 nuclei_masks=np.stack(nuclei_masks),
                 cell_masks=np.stack(tracked_cell_masks),
