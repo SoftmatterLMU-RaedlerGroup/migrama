@@ -21,8 +21,8 @@ This is a monolithic Python package. Run commands from the repository root.
 ### Module Entry Points
 - **migrama pattern**: `migrama pattern -p patterns.nd2 --fovs "all" -o patterns.csv`
 - **migrama average**: `migrama average -c cells.nd2 --output-dir ./averaged`
-- **migrama analyze**: `migrama analyze -c cells.nd2 --csv patterns.csv --cache ./cache.zarr -o analysis.csv --n-cells 4`
-- **migrama extract**: `migrama extract -c cells.nd2 --csv analysis.csv --cache ./cache.zarr -o extracted.zarr`
+- **migrama analyze**: `migrama analyze -c cells.nd2 --csv patterns.csv --cache ./cache.zarr -o analysis.csv --nc 1 --n-cells 4`
+- **migrama extract**: `migrama extract -c cells.nd2 --csv analysis.csv --cache ./cache.zarr -o extracted.zarr --nc 1`
 - **migrama convert**: `migrama convert -i tiff_folder/ -o converted.zarr --nc 0 --cell-channels 1,2`
 - **migrama info**: `migrama info -i extracted.zarr`
 - **migrama graph**: `migrama graph -i extracted.zarr --fov 0 --pattern 0 -o ./output --plot`

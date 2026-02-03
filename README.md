@@ -19,10 +19,10 @@ The main analysis pipeline runs in four stages:
 uv run migrama pattern -p patterns.nd2 --fovs "all" -o patterns.csv
 
 # 2. Analyze cell counts and find valid frame ranges
-uv run migrama analyze -c cells.nd2 --csv patterns.csv --cache cache.zarr -o analysis.csv --n-cells 4
+uv run migrama analyze -c cells.nd2 --csv patterns.csv --cache cache.zarr -o analysis.csv --nc 1 --n-cells 4
 
 # 3. Extract sequences with cell-first tracking
-uv run migrama extract -c cells.nd2 --csv analysis.csv --cache cache.zarr -o extracted.zarr
+uv run migrama extract -c cells.nd2 --csv analysis.csv --cache cache.zarr -o extracted.zarr --nc 1
 
 # 4. Export Zarr sequences to TIFF files
 uv run migrama save --zarr extracted.zarr --output ./tiffs/

@@ -5,10 +5,10 @@
 uv run migrama pattern --patterns ~/data/20250812/20250812_MDCK_LK_timelapse_patterns_before.nd2 --fovs "0" -o ~/results/20250812/patterns.csv --plot ~/plots/20250812/patterns
 
 # Step 2: Analyze cells and find valid time intervals
-uv run migrama analyze --cells ~/data/20250812/20250812_MDCK_LK_timelapse.nd2 --csv ~/results/20250812/patterns.csv --cache ~/results/20250812/cache.zarr -o ~/results/20250812/analysis.csv --n-cells 4
+uv run migrama analyze --cells ~/data/20250812/20250812_MDCK_LK_timelapse.nd2 --csv ~/results/20250812/patterns.csv --cache ~/results/20250812/cache.zarr -o ~/results/20250812/analysis.csv --nc 1 --n-cells 4
 
 # Step 3: Extract sequences with tracking
-uv run migrama extract --cells ~/data/20250812/20250812_MDCK_LK_timelapse.nd2 --csv ~/results/20250812/analysis.csv --cache ~/results/20250812/cache.zarr -o ~/results/20250812/extracted.zarr
+uv run migrama extract --cells ~/data/20250812/20250812_MDCK_LK_timelapse.nd2 --csv ~/results/20250812/analysis.csv --cache ~/results/20250812/cache.zarr -o ~/results/20250812/extracted.zarr --nc 1
 
 # Step 4: Export to TIFF files (optional, for easier downstream use)
 uv run migrama save --zarr ~/results/20250812/extracted.zarr --output ~/results/20250812/tiffs/
