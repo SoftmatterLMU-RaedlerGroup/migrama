@@ -115,8 +115,13 @@ class Extractor:
             merge_method=self.merge_method,
         )
 
+        total_frames = 0
+        cached_frames = 0
+        segmented_frames = 0
+
         for idx, row in enumerate(valid_rows):
             n_frames = row.t1 - row.t0 + 1
+            total_frames += n_frames
             logger.info(f"[{idx + 1}/{total}] FOV {row.fov}, cell {row.cell}: {n_frames} frames (t={row.t0}-{row.t1})")
 
             logger.info("  Extracting timelapse...")
@@ -128,10 +133,15 @@ class Extractor:
                 cell_masks = self._load_cached_masks(row.fov, row.cell, row.t0, row.t1)
                 if cell_masks is not None:
                     logger.info(f"  Loaded {len(cell_masks)} masks from cache")
+                    cached_frames += len(cell_masks)
 
             # If no cache or cache miss, segment
             if cell_masks is None:
-                logger.info(f"  Segmenting {n_frames} frames...")
+                if self._cache is not None:
+                    logger.info(f"  Cache miss: segmenting {n_frames} frames...")
+                else:
+                    logger.info(f"  Segmenting {n_frames} frames...")
+                segmented_frames += n_frames
                 if self.merge_method is None:
                     cell_masks = self._segment_all_channels(timelapse)
                 else:
@@ -171,6 +181,13 @@ class Extractor:
                 bbox=bbox,
             )
 
+        if self._cache is not None:
+            logger.info(
+                "Cache summary: loaded %d/%d frames from cache, segmented %d frames",
+                cached_frames,
+                total_frames,
+                segmented_frames,
+            )
         logger.info(f"Saved {total} sequences to {self.output_path}")
         return total
 
