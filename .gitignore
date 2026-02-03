@@ -200,6 +200,12 @@ Thumbs.db
 !docs/*.tiff
 !docs/*.tif
 
+# Test plot outputs
+tests/_plots/
+
+# Test results (extract workflow outputs)
+tests/_results/
+
 # Temporary test outputs
 channel_*_overlay.png
 fov_*.png
@@ -210,3 +216,4 @@ test_output_*
 
 data/
 output/
+.serena/

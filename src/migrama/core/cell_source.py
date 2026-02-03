@@ -78,6 +78,24 @@ class CellFovSource(ABC):
         """
         ...
 
+    @abstractmethod
+    def get_frame(self, fov_id: int, frame_id: int) -> np.ndarray:
+        """Get a single frame from a specific FOV.
+
+        Parameters
+        ----------
+        fov_id : int
+            Field of view index
+        frame_id : int
+            Frame/time index
+
+        Returns
+        -------
+        np.ndarray
+            Array of shape (n_channels, height, width)
+        """
+        ...
+
     def iter_fovs(self) -> Iterator[tuple[int, np.ndarray]]:
         """Iterate over FOVs in order, yielding (fov_id, tcyx_array).
 
@@ -162,6 +180,15 @@ class Nd2CellFovSource(CellFovSource):
             frames.append(stack)
 
         return np.stack(frames)
+
+    def get_frame(self, fov_id: int, frame_id: int) -> np.ndarray:
+        """Get a single frame from a specific FOV."""
+        if fov_id < 0 or fov_id >= self.n_fovs:
+            raise ValueError(f"FOV {fov_id} out of range (0-{self.n_fovs - 1})")
+        if frame_id < 0 or frame_id >= self.n_frames:
+            raise ValueError(f"Frame {frame_id} out of range (0-{self.n_frames - 1})")
+
+        return get_nd2_channel_stack(self._xarr, fov_id, frame_id)
 
 
 class TiffCellFovSource(CellFovSource):
@@ -330,3 +357,37 @@ class TiffCellFovSource(CellFovSource):
             expanded = np.expand_dims(data, axis=1)
             self._cache[fov_id] = expanded
             return expanded
+
+    def get_frame(self, fov_id: int, frame_id: int) -> np.ndarray:
+        """Get a single frame from a specific FOV."""
+        if fov_id < 0 or fov_id >= self.n_fovs:
+            raise ValueError(f"FOV {fov_id} out of range (0-{self.n_fovs - 1})")
+        if frame_id < 0 or frame_id >= self.n_frames:
+            raise ValueError(f"Frame {frame_id} out of range (0-{self.n_frames - 1})")
+
+        # If FOV is cached, return from cache
+        if fov_id in self._cache:
+            return self._cache[fov_id][frame_id]
+
+        # Otherwise read single frame from TIFF
+        tiff_path = None
+        for fid, path in self._tiff_files:
+            if fid == fov_id:
+                tiff_path = path
+                break
+
+        if tiff_path is None:
+            raise ValueError(f"TIFF file for FOV {fov_id} not found")
+
+        # Read specific frame using tifffile's page access
+        with tifffile.TiffFile(str(tiff_path)) as tif:
+            if self._tcyx:
+                # For TCYX, frame_id indexes the T dimension
+                # Each frame has C pages
+                start_page = frame_id * self._n_channels
+                pages = [tif.pages[start_page + c].asarray() for c in range(self._n_channels)]
+                return np.stack(pages)
+            else:
+                # For TYX (single channel), just read the frame
+                frame = tif.pages[frame_id].asarray()
+                return np.expand_dims(frame, axis=0)

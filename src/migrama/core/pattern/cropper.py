@@ -136,93 +136,14 @@ class CellCropper:
         """Get number of patterns in a FOV."""
         return len(self.get_bboxes(fov))
 
-    def extract_nuclei(
-        self,
-        fov: int,
-        frame: int,
-        cell: int,
-        normalize: bool = False,
-    ) -> np.ndarray:
-        """Extract nuclei region for a specific pattern.
-
-        Parameters
-        ----------
-        fov : int
-            Field of view index
-        frame : int
-            Frame index
-        cell : int
-            Pattern/cell index within FOV
-        normalize : bool
-            Whether to normalize to 0-255
-
-        Returns
-        -------
-        np.ndarray
-            Cropped nuclei image (h, w)
-        """
-        bboxes = self.get_bboxes(fov)
-        if cell >= len(bboxes):
-            raise ValueError(f"Cell {cell} not found in FOV {fov} (has {len(bboxes)} patterns)")
-
-        bbox = bboxes[cell]
-        fov_data = self.source.get_fov(fov)
-        img = fov_data[frame, self.nuclei_channel]
-        cropped = img[bbox.y : bbox.y + bbox.h, bbox.x : bbox.x + bbox.w]
-
-        if normalize:
-            cropped = self._normalize(cropped)
-
-        return cropped
-
-    def extract_all_channels(
-        self,
-        fov: int,
-        frame: int,
-        cell: int,
-        normalize: bool = False,
-    ) -> np.ndarray:
-        """Extract all channels for a specific pattern.
-
-        Parameters
-        ----------
-        fov : int
-            Field of view index
-        frame : int
-            Frame index
-        cell : int
-            Pattern/cell index within FOV
-        normalize : bool
-            Whether to normalize each channel to 0-255
-
-        Returns
-        -------
-        np.ndarray
-            Cropped image stack (n_channels, h, w)
-        """
-        bboxes = self.get_bboxes(fov)
-        if cell >= len(bboxes):
-            raise ValueError(f"Cell {cell} not found in FOV {fov} (has {len(bboxes)} patterns)")
-
-        bbox = bboxes[cell]
-        fov_data = self.source.get_fov(fov)
-        stack = fov_data[frame]
-        cropped = stack[:, bbox.y : bbox.y + bbox.h, bbox.x : bbox.x + bbox.w]
-
-        if normalize:
-            cropped = np.stack([self._normalize(c) for c in cropped])
-
-        return cropped
-
-    def extract_timelapse(
+    def extract(
         self,
         fov: int,
         cell: int,
-        start_frame: int = 0,
-        end_frame: int | None = None,
+        frames: int | tuple[int, int] | None = None,
         channels: list[int] | None = None,
     ) -> np.ndarray:
-        """Extract timelapse for a specific pattern.
+        """Extract cropped data for a pattern.
 
         Parameters
         ----------
@@ -230,33 +151,41 @@ class CellCropper:
             Field of view index
         cell : int
             Pattern/cell index within FOV
-        start_frame : int
-            Starting frame (inclusive)
-        end_frame : int | None
-            Ending frame (exclusive), None for all frames
+        frames : int | tuple[int, int] | None
+            Single frame index, (start, end) range, or None for all frames
         channels : list[int] | None
             Channel indices to extract, None for all
 
         Returns
         -------
         np.ndarray
-            Timelapse stack (n_frames, n_channels, h, w)
+            Single frame: (C, H, W), multiple frames: (T, C, H, W)
         """
         bboxes = self.get_bboxes(fov)
         if cell >= len(bboxes):
             raise ValueError(f"Cell {cell} not found in FOV {fov} (has {len(bboxes)} patterns)")
 
         bbox = bboxes[cell]
-        end_frame = end_frame or self.n_frames
         channels = channels or list(range(self.n_channels))
 
-        fov_data = self.source.get_fov(fov)
-        frames = []
-        for t in range(start_frame, end_frame):
-            cropped = fov_data[t, channels, bbox.y : bbox.y + bbox.h, bbox.x : bbox.x + bbox.w]
-            frames.append(cropped)
+        # Determine frame range
+        if frames is None:
+            start, end = 0, self.n_frames
+        elif isinstance(frames, int):
+            # Single frame - return (C, H, W)
+            stack = self.source.get_frame(fov, frames)
+            return stack[channels, bbox.y : bbox.y + bbox.h, bbox.x : bbox.x + bbox.w]
+        else:
+            start, end = frames
 
-        return np.stack(frames)
+        # Multiple frames - return (T, C, H, W)
+        result = []
+        for t in range(start, end):
+            stack = self.source.get_frame(fov, t)
+            cropped = stack[channels, bbox.y : bbox.y + bbox.h, bbox.x : bbox.x + bbox.w]
+            result.append(cropped)
+
+        return np.stack(result)
 
     def _normalize(self, image: np.ndarray) -> np.ndarray:
         """Normalize image to 0-255 uint8."""

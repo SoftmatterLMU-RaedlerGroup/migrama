@@ -14,7 +14,8 @@ authors = [
 dependencies = [
     # Core dependencies
     "numpy",
-    "h5py",
+    "zarr>=2.16",
+    "ome-zarr>=0.8",
     "pydantic>=2.0.0",
     "typer",
     # Cellpose and segmentation dependencies

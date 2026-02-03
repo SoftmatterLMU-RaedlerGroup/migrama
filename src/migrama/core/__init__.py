@@ -10,7 +10,7 @@ from .pattern import (
     PatternRecord,
     load_bboxes_csv,
 )
-from .segmentation import CellposeCounter, CellposeSegmenter
+from .segmentation import CellposeCounter, CellposeSegmenter, CountResult, WatershedCounter
 from .tracking import CellTracker
 from .voronoi import centroids_from_mask, generate_voronoi_labels
 
@@ -30,6 +30,8 @@ __all__ = [
     # Segmentation
     "CellposeCounter",
     "CellposeSegmenter",
+    "CountResult",
+    "WatershedCounter",
     # Tracking
     "CellTracker",
     # Graph

@@ -24,12 +24,9 @@ class DetectorParameters:
     """Parameters for pattern detection."""
 
     gaussian_blur_size: tuple[int, int] = (11, 11)
-    bimodal_threshold: float = 0.1
-    min_area_ratio: float = 0.5
-    max_area_ratio: float = 1.5
-    max_iterations: int = 10
-    edge_tolerance: int = 5
     morph_dilate_size: tuple[int, int] = (5, 5)
+    edge_tolerance: int = 5
+    min_area_ratio: float = 1 / 3  # Discard contours with area < median * min_area_ratio
 
 
 @dataclass
@@ -93,35 +90,18 @@ class PatternDetector:
         return list(contours), thresh
 
     def _filter_contours_by_area(self, contours: list[np.ndarray]) -> list[np.ndarray]:
-        """Filter contours by area distribution."""
+        """Filter contours by area using median-based threshold.
+
+        Removes contours with area < median_area * min_area_ratio.
+        """
         if not contours:
             return []
 
         areas = np.array([cv2.contourArea(c) for c in contours])
-        current_contours = list(contours)
-        current_areas = areas.copy()
+        median_area = np.median(areas)
+        min_area = median_area * self.parameters.min_area_ratio
 
-        for _ in range(self.parameters.max_iterations):
-            if len(current_areas) == 0:
-                break
-            cv = np.std(current_areas) / np.mean(current_areas)
-            if cv < self.parameters.bimodal_threshold:
-                break
-
-            mean_area = np.mean(current_areas)
-            min_area = self.parameters.min_area_ratio * mean_area
-            max_area = self.parameters.max_area_ratio * mean_area
-
-            filtered = [
-                (c, a) for c, a in zip(current_contours, current_areas, strict=False) if min_area <= a <= max_area
-            ]
-            if not filtered:
-                break
-            current_contours, current_areas = zip(*filtered, strict=False)
-            current_contours = list(current_contours)
-            current_areas = np.array(current_areas)
-
-        return current_contours
+        return [c for c, a in zip(contours, areas, strict=False) if a >= min_area]
 
     def _filter_by_edge(self, contours: list[np.ndarray], shape: tuple[int, int]) -> list[np.ndarray]:
         """Remove contours too close to image edge."""
@@ -173,8 +153,9 @@ class PatternDetector:
 
         normalized = self._normalize_pct(pattern_img)
         contours, _ = self._find_contours(normalized)
-        contours = self._filter_contours_by_area(contours)
+        # Filter edge first, then area
         contours = self._filter_by_edge(contours, normalized.shape)
+        contours = self._filter_contours_by_area(contours)
         bboxes = self._contours_to_bboxes(contours)
 
         records = []

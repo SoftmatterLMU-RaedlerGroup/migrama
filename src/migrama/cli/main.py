@@ -101,16 +101,30 @@ def analyze(
         ..., "--cells", "-c", help="Path to cells ND2 file or per-FOV TIFF file (e.g., ./folder/xxx_0.tif)"
     ),
     csv: str = typer.Option(..., "--csv", help="Path to patterns CSV file"),
+    cache: str = typer.Option(..., "--cache", help="Output cache.ome.zarr path for mask storage"),
     output: str = typer.Option("./analysis.csv", "--output", "-o", help="Output CSV file path"),
     nuclei_channel: int = typer.Option(1, "--nc", help="Channel index for nuclei"),
+    cell_channels: str = typer.Option(..., "--cc", help="Comma-separated cell channel indices (e.g., '0' or '1,2')"),
+    merge_method: str = typer.Option("none", "--merge-method", help="Channel merge method: 'add', 'multiply', or 'none'"),
     n_cells: int = typer.Option(4, "--n-cells", help="Target number of cells per pattern"),
-    min_size: int = typer.Option(15, "--min-size", help="Minimum object size for Cellpose"),
     tiff: bool = typer.Option(False, "--tiff", help="Interpret --cells as per-FOV TIFF file path"),
     debug: bool = typer.Option(False, "--debug"),
 ):
-    """Analyze cell counts and output t0/t1 ranges."""
+    """Analyze cell counts, cache masks, and output t0/t1 ranges."""
     log_level = logging.DEBUG if debug else logging.INFO
     logging.basicConfig(level=log_level, format="%(levelname)s - %(name)s - %(message)s")
+
+    # Parse cell_channels
+    try:
+        cell_channels_list = [int(x.strip()) for x in cell_channels.split(",")]
+    except ValueError:
+        typer.echo(f"Error: Invalid --cc format: {cell_channels}. Expected comma-separated integers (e.g., '0' or '1,2')", err=True)
+        raise typer.Exit(1) from None
+
+    # Validate merge_method
+    if merge_method not in ('add', 'multiply', 'none'):
+        typer.echo(f"Error: Invalid --merge-method: {merge_method}. Must be 'add', 'multiply', or 'none'", err=True)
+        raise typer.Exit(1)
 
     from ..analyze import Analyzer
     from ..core.cell_source import Nd2CellFovSource, TiffCellFovSource
@@ -123,12 +137,15 @@ def analyze(
     analyzer = Analyzer(
         source=source,
         csv_path=csv,
+        cache_path=cache,
         nuclei_channel=nuclei_channel,
+        cell_channels=cell_channels_list,
+        merge_method=merge_method,
         n_cells=n_cells,
-        min_size=min_size,
     )
     records = analyzer.analyze(output)
     typer.echo(f"Saved {len(records)} records to {output}")
+    typer.echo(f"Cached masks to {cache}")
 
 
 @app.command()
@@ -137,9 +154,11 @@ def extract(
         ..., "--cells", "-c", help="Path to cells ND2 file or per-FOV TIFF file (e.g., ./folder/xxx_0.tif)"
     ),
     csv: str = typer.Option(..., "--csv", help="Path to analysis CSV file"),
-    output: str = typer.Option("./extracted.h5", "--output", "-o", help="Output H5 file path"),
+    output: str = typer.Option("./extracted.zarr", "--output", "-o", help="Output Zarr store path"),
     nuclei_channel: int = typer.Option(1, "--nc", help="Channel index for nuclei"),
-    cell_channel: int = typer.Option(0, "--cc", help="Channel index for cell bodies"),
+    cell_channels: str = typer.Option(..., "--cc", help="Comma-separated cell channel indices (e.g., '0' or '1,2')"),
+    merge_method: str = typer.Option("none", "--merge-method", help="Channel merge method: 'add', 'multiply', or 'none'"),
+    cache: str = typer.Option(None, "--cache", help="Path to cache.ome.zarr with pre-computed cell masks"),
     min_frames: int = typer.Option(1, "--min-frames", help="Minimum frames per sequence"),
     tiff: bool = typer.Option(False, "--tiff", help="Interpret --cells as per-FOV TIFF file path"),
     debug: bool = typer.Option(False, "--debug"),
@@ -147,6 +166,18 @@ def extract(
     """Extract sequences with segmentation and tracking."""
     log_level = logging.DEBUG if debug else logging.INFO
     logging.basicConfig(level=log_level, format="%(levelname)s - %(name)s - %(message)s")
+
+    # Parse cell_channels (required)
+    try:
+        cell_channels_list = [int(x.strip()) for x in cell_channels.split(",")]
+    except ValueError:
+        typer.echo(f"Error: Invalid --cc format: {cell_channels}. Expected comma-separated integers (e.g., '0' or '1,2')", err=True)
+        raise typer.Exit(1) from None
+
+    # Validate merge_method
+    if merge_method not in ('add', 'multiply', 'none'):
+        typer.echo(f"Error: Invalid --merge-method: {merge_method}. Must be 'add', 'multiply', or 'none'", err=True)
+        raise typer.Exit(1)
 
     from ..core.cell_source import Nd2CellFovSource, TiffCellFovSource
     from ..extract import Extractor
@@ -161,7 +192,9 @@ def extract(
         analysis_csv=csv,
         output_path=output,
         nuclei_channel=nuclei_channel,
-        cell_channel=cell_channel,
+        cell_channels=cell_channels_list,
+        merge_method=merge_method,
+        cache_path=cache,
     )
     sequences = extractor.extract(min_frames=min_frames)
     typer.echo(f"Saved {sequences} sequences to {output}")
@@ -170,14 +203,30 @@ def extract(
 @app.command()
 def convert(
     input_folder: str = typer.Option(..., "--input", "-i", help="Path to folder with TIFF files"),
-    output: str = typer.Option("./converted.h5", "--output", "-o", help="Output H5 file path"),
+    output: str = typer.Option("./converted.zarr", "--output", "-o", help="Output Zarr store path"),
     nuclei_channel: int = typer.Option(0, "--nc", help="Channel index for nuclei"),
+    cell_channels: str | None = typer.Option(None, "--cell-channels", "--cc", help="Comma-separated cell channel indices (e.g., '1,2')"),
+    merge_method: str = typer.Option("none", "--merge-method", help="Channel merge method: 'add', 'multiply', or 'none'"),
     min_frames: int = typer.Option(1, "--min-frames", help="Minimum frames per sequence"),
     debug: bool = typer.Option(False, "--debug"),
 ):
-    """Convert TIFF files to H5 with segmentation and tracking."""
+    """Convert TIFF files to OME-Zarr with segmentation and tracking."""
     log_level = logging.DEBUG if debug else logging.INFO
     logging.basicConfig(level=log_level, format="%(levelname)s - %(name)s - %(message)s")
+
+    # Parse cell_channels if provided
+    cell_channels_list: list[int] | None = None
+    if cell_channels is not None:
+        try:
+            cell_channels_list = [int(x.strip()) for x in cell_channels.split(",")]
+        except ValueError:
+            typer.echo(f"Error: Invalid --cell-channels format: {cell_channels}. Expected comma-separated integers (e.g., '1,2')", err=True)
+            raise typer.Exit(1)
+
+    # Validate merge_method
+    if merge_method not in ('add', 'multiply', 'none'):
+        typer.echo(f"Error: Invalid --merge-method: {merge_method}. Must be 'add', 'multiply', or 'none'", err=True)
+        raise typer.Exit(1)
 
     from ..convert import Converter
     from ..core.progress import ProgressEvent
@@ -186,6 +235,8 @@ def convert(
         input_folder=input_folder,
         output_path=output,
         nuclei_channel=nuclei_channel,
+        cell_channels=cell_channels_list,
+        merge_method=merge_method,
     )
 
     from rich.progress import BarColumn, Progress, TaskID, TextColumn, TimeElapsedColumn
@@ -339,7 +390,7 @@ def tension(
 
 @app.command()
 def graph(
-    input: str = typer.Option(..., "--input", "-i", help="Path to H5 file with extracted data"),
+    input: str = typer.Option(..., "--input", "-i", help="Path to Zarr store with extracted data"),
     output: str = typer.Option(..., "--output", "-o", help="Output directory for plots"),
     fov: int = typer.Option(..., "--fov", help="FOV index"),
     pattern: int = typer.Option(..., "--pattern", help="Pattern index"),
@@ -349,7 +400,7 @@ def graph(
     plot: bool = typer.Option(False, "--plot", help="Generate boundary visualization plots"),
     debug: bool = typer.Option(False, "--debug"),
 ):
-    """Visualize cell boundaries (doublets, triplets, quartets) from extracted H5 data."""
+    """Visualize cell boundaries (doublets, triplets, quartets) from extracted Zarr data."""
     from pathlib import Path
 
     import matplotlib.pyplot as plt
@@ -365,9 +416,9 @@ def graph(
     from rich.progress import BarColumn, Progress, TaskID, TextColumn, TimeElapsedColumn
 
     from ..graph.adjacency import BoundaryPixelTracker
-    from ..graph.h5_loader import H5SegmentationLoader
+    from ..graph.zarr_loader import ZarrSegmentationLoader
 
-    loader = H5SegmentationLoader()
+    loader = ZarrSegmentationLoader()
     tracker = BoundaryPixelTracker()
 
     typer.echo(f"Loading sequence: FOV {fov}, Pattern {pattern}, Sequence {sequence}")
@@ -428,89 +479,93 @@ def graph(
 
 @app.command()
 def info(  # noqa: C901
-    input: str = typer.Option(..., "--input", "-i", help="Path to H5 file"),
+    input: str = typer.Option(..., "--input", "-i", help="Path to Zarr store"),
     plot: str | None = typer.Option(None, "--plot", "-p", help="Plot a dataset slice: 'path,(dim0,dim1,...)'"),
     output: str | None = typer.Option(None, "--output", "-o", help="Save plot to PNG file"),
 ):
-    """Print H5 file structure or plot a dataset slice."""
-    import h5py
+    """Print Zarr store structure or plot a dataset slice."""
+    import zarr
     import matplotlib.pyplot as plt
     import numpy as np
 
     path = Path(input)
     if not path.exists():
-        typer.echo(f"Error: File not found: {input}", err=True)
+        typer.echo(f"Error: Path not found: {input}", err=True)
         raise typer.Exit(1)
 
-    def print_structure(name, obj):
-        indent = "  " * name.count("/")
-        if isinstance(obj, h5py.Dataset):
-            typer.echo(f"{indent}{name}: dataset {obj.shape} {obj.dtype}")
-        elif isinstance(obj, h5py.Group):
-            typer.echo(f"{indent}{name}/ (group)")
-            for k, v in obj.attrs.items():
-                typer.echo(f"{indent}  attr {k}: {v}")
-
-    with h5py.File(path, "r") as f:
-        if plot is not None:
-            if "," not in plot or "(" not in plot or ")" not in plot:
-                typer.echo("Error: Invalid --plot format. Expected 'path,(dim0,dim1,...)'", err=True)
-                raise typer.Exit(1)
-
-            path_part, slice_part = plot.split(",", 1)
-            path_part = path_part.strip()
-            slice_part = slice_part.strip()
-
-            if not slice_part.startswith("(") or not slice_part.endswith(")"):
-                typer.echo("Error: Invalid --plot format. Expected 'path,(dim0,dim1,...)'", err=True)
-                raise typer.Exit(1)
-
-            slice_str = slice_part[1:-1]
-            try:
-                indices = [int(x.strip()) for x in slice_str.split(",") if x.strip() != ""]
-            except ValueError:
-                typer.echo("Error: Slice indices must be integers", err=True)
-                raise typer.Exit(1) from None
-
-            if path_part not in f:
-                typer.echo(f"Error: Dataset not found: {path_part}", err=True)
-                raise typer.Exit(1)
-
-            obj = f[path_part]
-            if not isinstance(obj, h5py.Dataset):
-                typer.echo(f"Error: Not a dataset: {path_part}", err=True)
-                raise typer.Exit(1)
-
-            dataset = obj
-            data = dataset[...]
-
-            try:
-                sliced = data[tuple(indices)]
-            except IndexError as e:
-                typer.echo(f"Error: Invalid slice indices for dataset shape {data.shape}: {e}", err=True)
-                raise typer.Exit(1) from None
-
-            if sliced.ndim != 2:
-                typer.echo(f"Error: Sliced result has {sliced.ndim} dimensions, expected 2", err=True)
-                raise typer.Exit(1)
-
-            plt.figure(figsize=(8, 6))
-            plt.imshow(np.asarray(sliced), cmap="viridis")
-            plt.colorbar()
-            plt.title(path_part)
-
-            if output:
-                plt.savefig(output)
-                typer.echo(f"Saved plot to: {output}")
+    def print_zarr_tree(group: zarr.Group, prefix: str = "") -> None:
+        for key in sorted(group.keys()):
+            item = group[key]
+            if isinstance(item, zarr.Array):
+                typer.echo(f"{prefix}{key}: array {item.shape} {item.dtype}")
             else:
-                typer.echo("Error: --output is required when using --plot", err=True)
-                raise typer.Exit(1)
+                typer.echo(f"{prefix}{key}/ (group)")
+                for k, v in item.attrs.items():
+                    typer.echo(f"{prefix}  attr {k}: {v}")
+                print_zarr_tree(item, prefix + "  ")
 
-            plt.close()
+    root = zarr.open(path, mode="r")
+
+    if plot is not None:
+        if "," not in plot or "(" not in plot or ")" not in plot:
+            typer.echo("Error: Invalid --plot format. Expected 'path,(dim0,dim1,...)'", err=True)
+            raise typer.Exit(1)
+
+        path_part, slice_part = plot.split(",", 1)
+        path_part = path_part.strip()
+        slice_part = slice_part.strip()
+
+        if not slice_part.startswith("(") or not slice_part.endswith(")"):
+            typer.echo("Error: Invalid --plot format. Expected 'path,(dim0,dim1,...)'", err=True)
+            raise typer.Exit(1)
+
+        slice_str = slice_part[1:-1]
+        try:
+            indices = [int(x.strip()) for x in slice_str.split(",") if x.strip() != ""]
+        except ValueError:
+            typer.echo("Error: Slice indices must be integers", err=True)
+            raise typer.Exit(1) from None
+
+        if path_part not in root:
+            typer.echo(f"Error: Dataset not found: {path_part}", err=True)
+            raise typer.Exit(1)
+
+        obj = root[path_part]
+        if not isinstance(obj, zarr.Array):
+            typer.echo(f"Error: Not an array: {path_part}", err=True)
+            raise typer.Exit(1)
+
+        data = obj[...]
+
+        try:
+            sliced = data[tuple(indices)]
+        except IndexError as e:
+            typer.echo(f"Error: Invalid slice indices for array shape {data.shape}: {e}", err=True)
+            raise typer.Exit(1) from None
+
+        if sliced.ndim != 2:
+            typer.echo(f"Error: Sliced result has {sliced.ndim} dimensions, expected 2", err=True)
+            raise typer.Exit(1)
+
+        plt.figure(figsize=(8, 6))
+        plt.imshow(np.asarray(sliced), cmap="viridis")
+        plt.colorbar()
+        plt.title(path_part)
+
+        if output:
+            plt.savefig(output)
+            typer.echo(f"Saved plot to: {output}")
         else:
-            typer.echo(f"H5 Structure: {path}")
-            typer.echo("-" * 60)
-            f.visititems(print_structure)
+            typer.echo("Error: --output is required when using --plot", err=True)
+            raise typer.Exit(1)
+
+        plt.close()
+    else:
+        typer.echo(f"Zarr Structure: {path}")
+        typer.echo("-" * 60)
+        for k, v in root.attrs.items():
+            typer.echo(f"attr {k}: {v}")
+        print_zarr_tree(root)
 
 
 @app.command()
