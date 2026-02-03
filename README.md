@@ -112,54 +112,60 @@ make html
 
 ### Basic Workflow
 
-1. **Optional Conversion**: Convert TIFF folders to HDF5
+The pipeline uses **cell-first tracking**: segment cells → track cells → derive nuclei within each tracked cell.
 
-```bash
-migrama convert \
-  --input /path/to/tiff_folder \
-  --output ./converted.h5 \
-  --nc 0
-```
-
-2. **Pattern Detection**: Detect patterns and save bounding boxes to CSV
+1. **Pattern Detection**: Detect patterns and save bounding boxes to CSV
 
 ```bash
 migrama pattern \
   --patterns /path/to/patterns.nd2 \
-  --output ./patterns.csv
+  --fovs "all" \
+  --output ./patterns.csv \
+  --plot ./pattern_plots/
 ```
 
-The output CSV has columns: `cell,fov,x,y,w,h`
+- `--fovs` is required: use `"all"` or ranges like `"0,2-5,8"`
+- `--plot` generates bbox overlay visualizations (optional)
+- Output CSV has columns: `cell,fov,x,y,w,h`
 
-3. **Cell Analysis**: Analyze cell counts and identify valid frame ranges
+2. **Cell Analysis**: Count cells and identify valid frame ranges
 
 ```bash
 migrama analyze \
   --cells /path/to/cells.nd2 \
   --csv ./patterns.csv \
+  --cache ./cache.zarr \
   --output ./analysis.csv \
   --nc 1 \
   --n-cells 4
 ```
 
-The output CSV adds columns: `t0,t1` (valid frame range for each pattern).
+- `--n-cells` is required: target number of cells per pattern
+- `--cache` stores segmentation masks for the extract step
+- Segments using all channels (Cellpose all-channel mode)
+- Output CSV adds columns: `t0,t1` (valid frame range)
 
-4. **Data Extraction**: Extract cropped timelapse sequences with tracking
+3. **Data Extraction**: Extract sequences with cell-first tracking
 
 ```bash
 migrama extract \
   --cells /path/to/cells.nd2 \
   --csv ./analysis.csv \
-  --output ./extracted.h5 \
+  --cache ./cache.zarr \
+  --output ./extracted.zarr \
   --nc 1 \
   --min-frames 20
 ```
 
-5. **Boundary & Junction Visualization**: Inspect doublets, triplets, and quartets
+- Cell-first workflow: track cells → derive nuclei via Otsu threshold
+- `--cache` loads pre-computed masks (optional, re-segments without it)
+- Output contains `cell_masks` (tracked) and `nuclei_masks` (derived)
+
+4. **Boundary & Junction Visualization**: Inspect cell boundaries
 
 ```bash
 migrama graph \
-  --input ./extracted.h5 \
+  --input ./extracted.zarr \
   --output ./analysis \
   --fov 0 \
   --pattern 0 \
@@ -167,11 +173,20 @@ migrama graph \
   --plot
 ```
 
-6. **Visualization**: Interactively view and select frames
+5. **Visualization**: Interactively view and select frames
 
 ```bash
 migrama viewer
 # Then open files through the application's file menu
+```
+
+6. **Optional Conversion**: Convert TIFF folders to Zarr
+
+```bash
+migrama convert \
+  --input /path/to/tiff_folder \
+  --output ./converted.zarr \
+  --nc 0
 ```
 
 ## Project Structure

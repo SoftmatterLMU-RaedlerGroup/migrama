@@ -1,222 +1,183 @@
 Quick Start Guide
 =================
 
-This guide will walk you through a typical Cell-LISCA analysis workflow from raw microscopy data to cell tracking and tension inference.
+This guide walks you through a typical Migrama analysis workflow from raw microscopy data to cell tracking.
+
+Cell-First Tracking
+-------------------
+
+Migrama uses **cell-first tracking**:
+
+1. Segment cells using all channels (Cellpose all-channel mode)
+2. Track cells across frames
+3. Derive nuclei by Otsu thresholding within each tracked cell
+
+This approach provides more robust tracking than nucleus-first methods.
 
 Basic Workflow
----------------
+--------------
 
 1. **Pattern Detection**: Extract bounding boxes for all micropatterns
-2. **Cell Count Analysis**: Count cells in each pattern across all frames
-3. **Data Extraction**: Extract sequences with segmentation masks
-4. **Cell Tracking**: Track cells and analyze topological transitions
-5. **Visualization**: Interactively view and select frames
+2. **Cell Count Analysis**: Count cells and find valid frame ranges
+3. **Data Extraction**: Extract sequences with cell-first tracking
+4. **Visualization**: Inspect boundaries and junctions
 
 Step 1: Pattern Detection
---------------------------
+-------------------------
 
-First, detect and extract pattern bounding boxes from your microscopy data:
+Detect and extract pattern bounding boxes from your microscopy data:
 
 .. code-block:: bash
 
-   cell-pattern extract \
+   migrama pattern \
      --patterns /path/to/patterns.nd2 \
-     --cells /path/to/cells.nd2 \
-     --nuclei-channel 1 \
-     --output ./bounding_boxes_all_fovs.h5
+     --fovs "all" \
+     --output ./patterns.csv \
+     --plot ./pattern_plots/
 
-This creates an HDF5 file containing bounding boxes for all patterns in all fields of view.
+Options:
+
+- ``--fovs`` (required): ``"all"`` or ranges like ``"0,2-5,8"``
+- ``--plot``: Generate bbox overlay visualizations (one PNG per FOV)
+
+Output CSV columns: ``cell,fov,x,y,w,h``
 
 Step 2: Cell Count Analysis
-----------------------------
+---------------------------
 
-Analyze cell counts for all patterns across the entire timelapse:
-
-.. code-block:: bash
-
-   cell-filter analysis \
-     --cells /path/to/cells.nd2 \
-     --h5 ./bounding_boxes_all_fovs.h5 \
-     --nuclei-channel 1 \
-     --range 0:10 \
-     --min-size 15
-
-This appends cell count data to the HDF5 file for each pattern in every frame.
-
-Step 3: Data Extraction with Segmentation
-------------------------------------------
-
-Extract sequences that match your criteria (e.g., patterns with exactly 4 cells):
+Analyze cell counts for all patterns across the timelapse:
 
 .. code-block:: bash
 
-   cell-filter extract \
+   migrama analyze \
      --cells /path/to/cells.nd2 \
-     --h5 ./bounding_boxes_all_fovs.h5 \
-     --nuclei-channel 1 \
-     --n-cells 4 \
-     --tolerance-gap 6 \
+     --csv ./patterns.csv \
+     --cache ./cache.zarr \
+     --output ./analysis.csv \
+     --nc 1 \
+     --n-cells 4
+
+Options:
+
+- ``--n-cells`` (required): Target number of cells per pattern
+- ``--nc``: Nuclear channel index (stored for extract step)
+- ``--cache``: Output path for segmentation mask cache
+
+This segments cells using all channels and finds the longest contiguous
+run of frames where the cell count matches ``--n-cells``.
+
+Output CSV adds columns: ``t0,t1`` (valid frame range for each pattern)
+
+Step 3: Data Extraction with Tracking
+-------------------------------------
+
+Extract sequences with cell-first tracking:
+
+.. code-block:: bash
+
+   migrama extract \
+     --cells /path/to/cells.nd2 \
+     --csv ./analysis.csv \
+     --cache ./cache.zarr \
+     --output ./extracted.zarr \
+     --nc 1 \
      --min-frames 20
 
-This extracts cropped image sequences with Cellpose segmentation masks and adds them to the HDF5 file.
+Options:
 
-Step 4: Export to NPY Format
------------------------------
+- ``--cache``: Load pre-computed masks (optional, re-segments without it)
+- ``--nc``: Nuclear channel for deriving nuclei within tracked cells
+- ``--min-frames``: Minimum frames required per sequence
 
-The extracted sequences need to be exported to NPY format for cell-grapher:
+The output Zarr store contains:
 
-.. code-block:: python
+- ``data``: Image data (T, C, H, W)
+- ``cell_masks``: Tracked cell masks (T, H, W)
+- ``nuclei_masks``: Derived nuclei masks (T, H, W)
 
-   import h5py
-   import numpy as np
-   
-   # Load extracted data from HDF5
-   with h5py.File('./bounding_boxes_all_fovs.h5', 'r') as f:
-       # Access a specific sequence
-       seq_data = f['/extracted/fov_000/pattern_000/seq_000/data'][:]
-       
-   # Save as NPY for cell-grapher
-   np.save('fov_000_pattern_000_seq_000.npy', seq_data)
+Step 4: Boundary Visualization
+------------------------------
 
-Step 5: Cell Tracking and Graph Analysis
-----------------------------------------
-
-Run cell tracking and T1 transition analysis:
+Inspect cell boundaries (doublets, triplets, quartets):
 
 .. code-block:: bash
 
-   cell-grapher \
-     --input fov_000_pattern_000_seq_000.npy \
-     --output ./analysis
+   migrama graph \
+     --input ./extracted.zarr \
+     --output ./analysis \
+     --fov 0 \
+     --pattern 0 \
+     --sequence 0 \
+     --plot
 
-This generates:
-- Tracked cell data with global IDs
-- Region adjacency graphs
-- T1 transition detection
-- Visualization video
-
-Step 6: Interactive Visualization
+Step 5: Interactive Visualization
 ---------------------------------
 
-Launch cell-viewer to explore your data:
+Launch the interactive viewer:
 
 .. code-block:: bash
 
-   cell-viewer
+   migrama viewer
 
-Then use the GUI to:
-- Open your NPY files
-- Navigate through frames
-- Select intervals of interest
-- Export selected sequences
+Use the GUI to navigate frames and inspect data.
 
-Complete Example Script
------------------------
+Complete Example
+----------------
 
-Here's a complete Python script that automates the workflow:
+.. code-block:: bash
 
-.. code-block:: python
+   # 1. Detect patterns in all FOVs
+   migrama pattern \
+     --patterns data/patterns.nd2 \
+     --fovs "all" \
+     --output results/patterns.csv \
+     --plot results/pattern_plots/
 
-   #!/usr/bin/env python
-   """Complete Cell-LISCA workflow example."""
-   
-   import subprocess
-   import h5py
-   import numpy as np
-   from pathlib import Path
-   
-   # Configuration
-   PATTERNS_FILE = "/path/to/patterns.nd2"
-   CELLS_FILE = "/path/to/cells.nd2"
-   NUCLEI_CHANNEL = 1
-   N_CELLS = 4
-   MIN_SIZE = 15
-   TOLERANCE_GAP = 6
-   MIN_FRAMES = 20
-   FOV_RANGE = "0:10"
-   
-   # Step 1: Pattern detection
-   print("Step 1: Detecting patterns...")
-   subprocess.run([
-       "cell-pattern", "extract",
-       "--patterns", PATTERNS_FILE,
-       "--cells", CELLS_FILE,
-       "--nuclei-channel", str(NUCLEI_CHANNEL),
-       "--output", "./bounding_boxes.h5"
-   ], check=True)
-   
-   # Step 2: Cell count analysis
-   print("Step 2: Analyzing cell counts...")
-   subprocess.run([
-       "cell-filter", "analysis",
-       "--cells", CELLS_FILE,
-       "--h5", "./bounding_boxes.h5",
-       "--nuclei-channel", str(NUCLEI_CHANNEL),
-       "--range", FOV_RANGE,
-       "--min-size", str(MIN_SIZE)
-   ], check=True)
-   
-   # Step 3: Data extraction
-   print("Step 3: Extracting sequences...")
-   subprocess.run([
-       "cell-filter", "extract",
-       "--cells", CELLS_FILE,
-       "--h5", "./bounding_boxes.h5",
-       "--nuclei-channel", str(NUCLEI_CHANNEL),
-       "--n-cells", str(N_CELLS),
-       "--tolerance-gap", str(TOLERANCE_GAP),
-       "--min-frames", str(MIN_FRAMES)
-   ], check=True)
-   
-   # Step 4: Export to NPY
-   print("Step 4: Exporting to NPY format...")
-   with h5py.File("./bounding_boxes.h5", "r") as f:
-       if "/extracted" in f:
-           # Find first available sequence
-           for fov in f["/extracted"]:
-               for pattern in f[f"/extracted/{fov}"]:
-                   for seq in f[f"/extracted/{fov}/{pattern}"]:
-                       data = f[f"/extracted/{fov}/{pattern}/{seq}/data"][:]
-                       output_file = f"{fov}_{pattern}_{seq}.npy"
-                       np.save(output_file, data)
-                       print(f"Exported {output_file}")
-                       break
-                   break
-               break
-   
-   # Step 5: Run cell-grapher on first sequence
-   npy_files = list(Path(".").glob("fov_*_pattern_*_seq_*.npy"))
-   if npy_files:
-       first_file = npy_files[0]
-       print(f"Step 5: Running cell-grapher on {first_file}...")
-       subprocess.run([
-           "cell-grapher",
-           "--input", str(first_file),
-           "--output", "./analysis"
-       ], check=True)
-   
-   print("Workflow complete!")
+   # 2. Analyze cell counts (4 cells per pattern)
+   migrama analyze \
+     --cells data/cells.nd2 \
+     --csv results/patterns.csv \
+     --cache results/cache.zarr \
+     --output results/analysis.csv \
+     --nc 1 \
+     --n-cells 4
+
+   # 3. Extract sequences with cell-first tracking
+   migrama extract \
+     --cells data/cells.nd2 \
+     --csv results/analysis.csv \
+     --cache results/cache.zarr \
+     --output results/extracted.zarr \
+     --nc 1 \
+     --min-frames 20
+
+   # 4. Visualize boundaries
+   migrama graph \
+     --input results/extracted.zarr \
+     --output results/boundaries \
+     --fov 0 --pattern 0 --sequence 0 \
+     --plot
 
 Tips and Best Practices
-------------------------
+-----------------------
 
-1. **Data Organization**: Keep all data files in a structured directory hierarchy
-2. **Parameter Tuning**: Adjust ``--min-size`` for cell detection based on your data
-3. **Memory Management**: Process large datasets in chunks to avoid memory issues
-4. **GPU Acceleration**: Install PyTorch with CUDA support for faster Cellpose segmentation
-5. **Quality Control**: Use cell-viewer to visually inspect results before downstream analysis
+1. **Start with a single FOV**: Use ``--fovs "0"`` to test parameters
+2. **Check pattern detection**: Use ``--plot`` to verify bounding boxes
+3. **GPU acceleration**: Ensure PyTorch with CUDA is installed for faster segmentation
+4. **Memory management**: Process large datasets with specific FOV ranges
+5. **Quality control**: Use ``migrama info`` to inspect Zarr structure
 
 Common Issues
 -------------
 
-1. **Pattern Detection Fails**: Check that your patterns file has the correct format (single channel, single frame)
-2. **Poor Cell Segmentation**: Adjust Cellpose model type or diameter parameter
-3. **Memory Errors**: Reduce the number of frames processed at once
-4. **No T1 Transitions Detected**: Check adjacency method sensitivity in cell-grapher
+1. **Pattern detection fails**: Check that patterns file has correct format
+2. **No valid frame ranges**: Adjust ``--n-cells`` to match your data
+3. **Memory errors**: Process fewer FOVs at once with ``--fovs``
+4. **Poor tracking**: Ensure cells are well-separated in the images
 
 Next Steps
 ----------
 
-- Explore the :doc:`workflows` section for advanced analysis pipelines
-- Check the :doc:`modules/index` for detailed module documentation
+- Explore the :doc:`workflows` section for advanced pipelines
+- Check the :doc:`modules/index` for module documentation
 - See the :doc:`examples` page for specific use cases
