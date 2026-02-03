@@ -49,6 +49,7 @@ class PatternTracker:
         self.dropped_zero: set[int] = set()
         self.counts: dict[int, list[int]] = {i: [] for i in range(n_patterns)}
         self.masks: dict[int, list[np.ndarray]] = {i: [] for i in range(n_patterns)}
+        self.data: dict[int, list[np.ndarray]] = {i: [] for i in range(n_patterns)}
         self.zero_streak: dict[int, int] = {i: 0 for i in range(n_patterns)}
         self.zero_threshold = zero_threshold
 
@@ -60,7 +61,7 @@ class PatternTracker:
         """Get sorted list of indices still being tracked."""
         return sorted(self.tracked)
 
-    def record_result(self, idx: int, count: int, mask: np.ndarray) -> None:
+    def record_result(self, idx: int, count: int, mask: np.ndarray, data: np.ndarray) -> None:
         """Record a segmentation result for a pattern.
 
         If count is 0, increment zero streak. If zero streak exceeds
@@ -68,6 +69,7 @@ class PatternTracker:
         """
         self.counts[idx].append(count)
         self.masks[idx].append(mask)
+        self.data[idx].append(data)
 
         if count == 0:
             self.zero_streak[idx] += 1
@@ -79,11 +81,12 @@ class PatternTracker:
     def record_skipped(self, idx: int) -> None:
         """Record that a pattern was skipped (already dropped).
 
-        Appends -1 count and empty mask to maintain frame alignment.
+        Appends -1 count and empty placeholders to maintain frame alignment.
         """
         self.counts[idx].append(-1)
-        # Use a placeholder empty mask
+        # Use placeholder empty arrays
         self.masks[idx].append(np.zeros((1, 1), dtype=np.uint16))
+        self.data[idx].append(np.zeros((1, 1, 1), dtype=np.uint16))
 
     def _drop_zero(self, idx: int) -> None:
         """Mark pattern as dropped due to consecutive zero nuclei."""
@@ -99,6 +102,10 @@ class PatternTracker:
     def get_masks(self, idx: int) -> list[np.ndarray]:
         """Get mask history for a pattern."""
         return self.masks[idx]
+
+    def get_data(self, idx: int) -> list[np.ndarray]:
+        """Get raw data history for a pattern."""
+        return self.data[idx]
 
 
 class Analyzer:
@@ -194,7 +201,7 @@ class Analyzer:
 
             # Create FOV group in cache if caching is enabled
             # Note: use 'is not None' because zarr v3 groups evaluate to False when empty
-            fov_group = cache_store.create_group(f"fov{fov_idx:03d}") if cache_store is not None else None
+            fov_group = cache_store.require_group(f"fov/{fov_idx}") if cache_store is not None else None
 
             # Initialize pattern tracker for progressive reduction
             tracker = PatternTracker(n_patterns, zero_threshold=3)
@@ -224,7 +231,7 @@ class Analyzer:
 
                 # Record results for tracked patterns
                 for i, cell_idx in enumerate(tracked_indices):
-                    tracker.record_result(cell_idx, result.counts[i], result.masks[i])
+                    tracker.record_result(cell_idx, result.counts[i], result.masks[i], crops[i])
 
                 # Record skipped for dropped patterns
                 for cell_idx in range(n_patterns):
@@ -244,37 +251,37 @@ class Analyzer:
                 if fov_group is not None:
                     # Stack masks for this pattern: (T, H, W)
                     masks_list = tracker.get_masks(cell_idx)
-
-                    # Handle variable mask sizes (from skipped frames)
-                    # Find the most common shape
-                    shapes = [m.shape for m in masks_list if m.shape != (1, 1)]
-                    if shapes:
-                        target_shape = max(set(shapes), key=shapes.count)
-                    else:
-                        target_shape = (64, 64)  # fallback
-
-                    # Resize placeholder masks to target shape
-                    normalized_masks = []
-                    for m in masks_list:
-                        if m.shape == (1, 1):
-                            normalized_masks.append(np.zeros(target_shape, dtype=np.uint16))
-                        elif m.shape != target_shape:
-                            # Pad or crop to target shape
-                            padded = np.zeros(target_shape, dtype=m.dtype)
-                            h, w = min(m.shape[0], target_shape[0]), min(m.shape[1], target_shape[1])
-                            padded[:h, :w] = m[:h, :w]
-                            normalized_masks.append(padded)
-                        else:
-                            normalized_masks.append(m)
-
+                    target_mask_shape = next((m.shape for m in masks_list if m.shape != (1, 1)), (1, 1))
+                    normalized_masks = [
+                        np.zeros(target_mask_shape, dtype=np.uint16) if m.shape == (1, 1) else m
+                        for m in masks_list
+                    ]
                     masks_stack = np.stack(normalized_masks)
 
-                    cell_group = fov_group.create_group(f"cell{bbox.cell:03d}")
-                    cell_group.create_array(
-                        "cell_masks",
+                    cell_group = fov_group.require_group(f"cell/{bbox.cell}")
+                    mask_group = cell_group.require_group("mask")
+                    mask_group.create_array(
+                        "cell",
                         data=masks_stack,
                         chunks=(1, masks_stack.shape[1], masks_stack.shape[2]),
+                        overwrite=True,
                     )
+
+                    # Stack and save raw data: (T, C, H, W)
+                    data_list = tracker.get_data(cell_idx)
+                    target_data_shape = next((d.shape for d in data_list if d.shape != (1, 1, 1)), (1, 1, 1))
+                    normalized_data = [
+                        np.zeros(target_data_shape, dtype=np.uint16) if d.shape == (1, 1, 1) else d
+                        for d in data_list
+                    ]
+                    data_stack = np.stack(normalized_data)
+                    cell_group.create_array(
+                        "data",
+                        data=data_stack,
+                        chunks=(1, 1, data_stack.shape[2], data_stack.shape[3]),
+                        overwrite=True,
+                    )
+                    logger.info(f"    Saving {data_stack.shape[0]} frames to cache...")
                     # Store bbox metadata
                     cell_group.attrs["bbox"] = [bbox.x, bbox.y, bbox.w, bbox.h]
                     cell_group.attrs["fov"] = bbox.fov
