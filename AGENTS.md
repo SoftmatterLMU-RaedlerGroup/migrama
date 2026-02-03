@@ -13,19 +13,19 @@ This is a monolithic Python package. Run commands from the repository root.
 - **Type check**: No explicit typecheck command configured
 
 ### Testing
-- **Current Status**: No test files are currently implemented in the repository
-- **Future Testing**: When tests are added, they should be placed in `tests/` directory in the repository root
-- **Test Commands** (for future use):
-  - `python -m pytest tests/ -v`
-  - `python -m pytest tests/test_specific.py::test_function -v`
+- **Run all tests**: `uv run pytest tests/ -v`
+- **Run single test**: `uv run pytest tests/test_specific.py::test_function -v`
+- **Test files**: Located in `tests/` directory (test_analyze.py, test_extract.py, test_pattern.py, etc.)
+- **AI agents**: Do NOT run full test suite automatically - tests are slow. Prefer targeted manual testing of changed functionality. Only run specific tests when explicitly requested.
 
 ### Module Entry Points
-- **migrama pattern**: `migrama pattern -p patterns.nd2 -o patterns.csv`
-- **migrama analyze**: `migrama analyze -c cells.nd2 --csv patterns.csv -o analysis.csv --n-cells 4`
-- **migrama extract**: `migrama extract -c cells.nd2 --csv analysis.csv -o extracted.h5`
-- **migrama convert**: `migrama convert -i tiff_folder/ -o converted.h5 --nuclei-channel 0 --cell-channel 1`
-- **migrama info**: `migrama info -i extracted.h5`
-- **migrama graph**: `migrama graph -i extracted.h5 --fov 0 --pattern 0 --sequence 0 -o ./output`
+- **migrama pattern**: `migrama pattern -p patterns.nd2 --fovs "all" -o patterns.csv`
+- **migrama average**: `migrama average -c cells.nd2 --output-dir ./averaged`
+- **migrama analyze**: `migrama analyze -c cells.nd2 --csv patterns.csv --cache ./cache.zarr -o analysis.csv --n-cells 4`
+- **migrama extract**: `migrama extract -c cells.nd2 --csv analysis.csv --cache ./cache.zarr -o extracted.zarr`
+- **migrama convert**: `migrama convert -i tiff_folder/ -o converted.zarr --nc 0 --cell-channels 1,2`
+- **migrama info**: `migrama info -i extracted.zarr`
+- **migrama graph**: `migrama graph -i extracted.zarr --fov 0 --pattern 0 --sequence 0 -o ./output --plot`
 - **migrama tension**: `migrama tension --mask xxx.npy`
 - **migrama viewer**: `migrama viewer`
 
@@ -71,40 +71,41 @@ from migrama.core import PatternDetector, CellCropper
 - **Structure**: Follow the existing documentation structure in docs/
 
 ### Dependencies
-- **migrama**: numpy, h5py, pydantic>=2.0.0, typer, cellpose>4, torch, torchvision, matplotlib, opencv-python, scikit-image, scipy, tifffile, networkx, btrack, nd2, xarray, dask, pyyaml>=6.0.2, PySide6
+- **migrama**: numpy, zarr, pydantic>=2.0.0, typer, cellpose>4, torch, torchvision, matplotlib, opencv-python, scikit-image, scipy, tifffile, networkx, btrack, nd2, xarray, dask, pyyaml>=6.0.2, PySide6, rich
 
 ### Testing
-- **Current Status**: No test files are currently implemented
-- **Future Implementation**: When tests are added, they should be placed in `tests/` directories within each package
+- **Test Location**: Tests are in `tests/` directory
 - **Test Guidelines**: Use assertions for validation, not specific numeric results for data-dependent tests
-- **Integration Tests**: May reference external data paths when implemented
+- **Data Fixtures**: Tests use synthetic data generated in `tests/conftest.py` and `tests/data.py`
 
 ## Pipeline Architecture
 
 The migrama pipeline processes micropatterned timelapse microscopy data through four stages:
 
 ### Stage 1: Pattern Detection (`migrama pattern`)
-- **Input**: `patterns.nd2` (single-frame, single-channel pattern image)
+- **Input**: Pattern image file (.nd2 or .tif/.tiff, single-frame, single-channel)
 - **Output**: `patterns.csv` with columns: `cell,fov,x,y,w,h`
   - `cell`: pattern index within FOV
   - `fov`: field of view index
   - `x,y,w,h`: bounding box coordinates
 
 ### Stage 2: Cell Analysis (`migrama analyze`)
-- **Input**: `cells.nd2` + `patterns.csv`
-- **Output**: `analysis.csv` with columns: `cell,fov,x,y,w,h,t0,t1`
-  - `t0,t1`: longest contiguous frame range where target cell count is maintained
+- **Input**: Cells file (.nd2 or .tif/.tiff) + `patterns.csv`
+- **Output**:
+  - `analysis.csv` with columns: `cell,fov,x,y,w,h,t0,t1`
+    - `t0,t1`: longest contiguous frame range where target cell count is maintained
+  - `cache.zarr`: cached cell masks for the extract step
 
 ### Stage 3: Sequence Extraction (`migrama extract`)
-- **Input**: `cells.nd2` + `analysis.csv`
-- **Output**: `extracted.h5` containing:
+- **Input**: Cells file (.nd2 or .tif/.tiff) + `analysis.csv` + optional `cache.zarr`
+- **Output**: `extracted.zarr` containing:
   - Cropped timelapse sequences
-  - Tracked nuclei masks
-  - Tracked cell masks aligned to nuclei IDs
+  - Tracked cell masks (cell-first tracking)
+  - Derived nuclei masks (Otsu threshold within tracked cells)
 
 ### Stage 4: Graph Analysis (`migrama graph`)
-- **Input**: `extracted.h5` (tracked segmentation layer)
-- **Output**: Region adjacency networks, T1 transition analysis
+- **Input**: `extracted.zarr` (tracked segmentation layer)
+- **Output**: Boundary visualization plots (doublets, triplets, quartets)
 
 ## Core Classes
 

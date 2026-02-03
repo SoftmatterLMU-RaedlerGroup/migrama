@@ -129,14 +129,14 @@ class CellposeSegmenter:
                 # Extract and merge channels
                 # At this point, image should be in (H, W, C) format
                 n_channels = image.shape[2]
-                
+
                 if nuclei_channel is None:
                     nuclei_channel = 0
-                
+
                 if cell_channels is None:
                     # Use all channels except nuclei_channel
                     cell_channels = [i for i in range(n_channels) if i != nuclei_channel]
-                
+
                 if not cell_channels:
                     raise ValueError(f"No cell channels specified (nuclei_channel={nuclei_channel}, total_channels={n_channels})")
 

@@ -108,11 +108,12 @@ class Analyzer:
         self,
         source: CellFovSource,
         csv_path: str,
-        cache_path: str,
+        cache_path: str | None = None,
         nuclei_channel: int = 1,
         cell_channels: list[int] | None = None,
         merge_method: str = 'none',
         n_cells: int = 4,
+        allowed_gap: int = 6,
     ) -> None:
         """Initialize Analyzer.
 
@@ -122,8 +123,8 @@ class Analyzer:
             Source of cell timelapse data (ND2 or TIFF)
         csv_path : str
             Path to patterns CSV file
-        cache_path : str
-            Path to output cache.ome.zarr for mask storage
+        cache_path : str | None
+            Path to output cache.ome.zarr for mask storage (optional)
         nuclei_channel : int
             Channel index for nuclei
         cell_channels : list[int] | None
@@ -132,14 +133,17 @@ class Analyzer:
             Channel merge method: 'add', 'multiply', or 'none'
         n_cells : int
             Target number of cells per pattern
+        allowed_gap : int
+            Maximum consecutive non-target frames to bridge over
         """
         self.source = source
         self.csv_path = Path(csv_path).resolve()
-        self.cache_path = Path(cache_path).resolve()
+        self.cache_path = Path(cache_path).resolve() if cache_path else None
         self.nuclei_channel = nuclei_channel
         self.cell_channels = cell_channels
         self.merge_method = merge_method
         self.n_cells = n_cells
+        self.allowed_gap = allowed_gap
 
         self.cropper = CellCropper(
             source=source,
@@ -173,9 +177,11 @@ class Analyzer:
 
         records: list[AnalysisRecord] = []
 
-        # Create cache zarr store
-        self.cache_path.parent.mkdir(parents=True, exist_ok=True)
-        cache_store = zarr.open(str(self.cache_path), mode='w')
+        # Create cache zarr store if caching is enabled
+        cache_store = None
+        if self.cache_path:
+            self.cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_store = zarr.open(str(self.cache_path), mode='w')
 
         for fov_idx in sorted(self.cropper.bboxes_by_fov.keys()):
             bboxes = self.cropper.get_bboxes(fov_idx)
@@ -186,8 +192,8 @@ class Analyzer:
             n_frames = self.cropper.n_frames
             logger.info(f"Analyzing FOV {fov_idx}: {n_patterns} patterns × {n_frames} frames")
 
-            # Create FOV group in cache
-            fov_group = cache_store.create_group(f"fov{fov_idx:03d}")
+            # Create FOV group in cache if caching is enabled
+            fov_group = cache_store.create_group(f"fov{fov_idx:03d}") if cache_store else None
 
             # Initialize pattern tracker for progressive reduction
             tracker = PatternTracker(n_patterns, zero_threshold=3)
@@ -233,48 +239,49 @@ class Analyzer:
 
             # Save masks to cache and compute t0/t1
             for cell_idx, bbox in enumerate(bboxes):
-                # Stack masks for this pattern: (T, H, W)
-                masks_list = tracker.get_masks(cell_idx)
+                # Save to cache if caching is enabled
+                if fov_group is not None:
+                    # Stack masks for this pattern: (T, H, W)
+                    masks_list = tracker.get_masks(cell_idx)
 
-                # Handle variable mask sizes (from skipped frames)
-                # Find the most common shape
-                shapes = [m.shape for m in masks_list if m.shape != (1, 1)]
-                if shapes:
-                    target_shape = max(set(shapes), key=shapes.count)
-                else:
-                    target_shape = (64, 64)  # fallback
-
-                # Resize placeholder masks to target shape
-                normalized_masks = []
-                for m in masks_list:
-                    if m.shape == (1, 1):
-                        normalized_masks.append(np.zeros(target_shape, dtype=np.uint16))
-                    elif m.shape != target_shape:
-                        # Pad or crop to target shape
-                        padded = np.zeros(target_shape, dtype=m.dtype)
-                        h, w = min(m.shape[0], target_shape[0]), min(m.shape[1], target_shape[1])
-                        padded[:h, :w] = m[:h, :w]
-                        normalized_masks.append(padded)
+                    # Handle variable mask sizes (from skipped frames)
+                    # Find the most common shape
+                    shapes = [m.shape for m in masks_list if m.shape != (1, 1)]
+                    if shapes:
+                        target_shape = max(set(shapes), key=shapes.count)
                     else:
-                        normalized_masks.append(m)
+                        target_shape = (64, 64)  # fallback
 
-                masks_stack = np.stack(normalized_masks)
+                    # Resize placeholder masks to target shape
+                    normalized_masks = []
+                    for m in masks_list:
+                        if m.shape == (1, 1):
+                            normalized_masks.append(np.zeros(target_shape, dtype=np.uint16))
+                        elif m.shape != target_shape:
+                            # Pad or crop to target shape
+                            padded = np.zeros(target_shape, dtype=m.dtype)
+                            h, w = min(m.shape[0], target_shape[0]), min(m.shape[1], target_shape[1])
+                            padded[:h, :w] = m[:h, :w]
+                            normalized_masks.append(padded)
+                        else:
+                            normalized_masks.append(m)
 
-                # Save to cache
-                cell_group = fov_group.create_group(f"cell{cell_idx:03d}")
-                cell_group.create_array(
-                    "cell_masks",
-                    data=masks_stack,
-                    chunks=(1, masks_stack.shape[1], masks_stack.shape[2]),
-                )
-                # Store bbox metadata
-                cell_group.attrs["bbox"] = [bbox.x, bbox.y, bbox.w, bbox.h]
-                cell_group.attrs["fov"] = bbox.fov
-                cell_group.attrs["cell"] = bbox.cell
+                    masks_stack = np.stack(normalized_masks)
+
+                    cell_group = fov_group.create_group(f"cell{cell_idx:03d}")
+                    cell_group.create_array(
+                        "cell_masks",
+                        data=masks_stack,
+                        chunks=(1, masks_stack.shape[1], masks_stack.shape[2]),
+                    )
+                    # Store bbox metadata
+                    cell_group.attrs["bbox"] = [bbox.x, bbox.y, bbox.w, bbox.h]
+                    cell_group.attrs["fov"] = bbox.fov
+                    cell_group.attrs["cell"] = bbox.cell
 
                 # Compute t0/t1 from counts (excluding -1 skipped frames)
                 counts = tracker.get_counts(cell_idx)
-                t0, t1 = self._find_longest_run(counts, self.n_cells)
+                t0, t1 = self._find_longest_run(counts, self.n_cells, self.allowed_gap)
                 records.append(
                     AnalysisRecord(
                         cell=bbox.cell,
@@ -288,60 +295,77 @@ class Analyzer:
                     )
                 )
 
-            logger.info(f"  Cached {len(bboxes)} pattern masks for FOV {fov_idx}")
+            if fov_group is not None:
+                logger.info(f"  Cached {len(bboxes)} pattern masks for FOV {fov_idx}")
 
-        # Store global metadata in cache
-        cache_store.attrs["nuclei_channel"] = self.nuclei_channel
-        cache_store.attrs["cell_channels"] = self.cell_channels
-        cache_store.attrs["merge_method"] = self.merge_method
-        cache_store.attrs["n_fovs"] = len(self.cropper.bboxes_by_fov)
-
-        logger.info(f"Saved mask cache to {self.cache_path}")
+        # Store global metadata in cache if caching is enabled
+        if cache_store is not None:
+            cache_store.attrs["nuclei_channel"] = self.nuclei_channel
+            cache_store.attrs["cell_channels"] = self.cell_channels
+            cache_store.attrs["merge_method"] = self.merge_method
+            cache_store.attrs["n_fovs"] = len(self.cropper.bboxes_by_fov)
+            logger.info(f"Saved mask cache to {self.cache_path}")
 
         self._write_csv(output_path, records)
         return records
 
     @staticmethod
-    def _find_longest_run(counts: list[int], target: int) -> tuple[int, int]:
-        """Find longest contiguous run of target counts.
+    def _find_longest_run(counts: list[int], target: int, allowed_gap: int = 0) -> tuple[int, int]:
+        """Find longest contiguous run of target counts, allowing small gaps.
 
-        Skips frames with count == -1 (dropped patterns).
+        Parameters
+        ----------
+        counts : list[int]
+            Cell counts per frame (-1 for skipped frames)
+        target : int
+            Target cell count
+        allowed_gap : int
+            Maximum consecutive non-target frames to bridge over
+
+        Returns
+        -------
+        tuple[int, int]
+            (t0, t1) frame range, or (-1, -1) if no valid run
         """
         best_start = -1
         best_end = -1
         best_len = 0
+
         current_start: int | None = None
+        last_good_idx: int | None = None
+        gap_count = 0
 
         for idx, count in enumerate(counts):
-            if count == -1:
-                # Skipped frame breaks the run
-                if current_start is not None:
-                    current_end = idx - 1
-                    length = current_end - current_start + 1
+            is_good = (count == target)
+            is_skipped = (count == -1)
+
+            if is_good:
+                if current_start is None:
+                    # Start new run
+                    current_start = idx
+                last_good_idx = idx
+                gap_count = 0
+            elif current_start is not None:
+                # We're in a run but hit a non-target frame
+                gap_count += 1
+                if gap_count > allowed_gap:
+                    # Gap too large, end the run at last good frame
+                    length = last_good_idx - current_start + 1
                     if length > best_len:
                         best_len = length
                         best_start = current_start
-                        best_end = current_end
+                        best_end = last_good_idx
                     current_start = None
-            elif count == target:
-                if current_start is None:
-                    current_start = idx
-            elif current_start is not None:
-                current_end = idx - 1
-                length = current_end - current_start + 1
-                if length > best_len:
-                    best_len = length
-                    best_start = current_start
-                    best_end = current_end
-                current_start = None
+                    last_good_idx = None
+                    gap_count = 0
 
-        if current_start is not None:
-            current_end = len(counts) - 1
-            length = current_end - current_start + 1
+        # Handle run that extends to end
+        if current_start is not None and last_good_idx is not None:
+            length = last_good_idx - current_start + 1
             if length > best_len:
                 best_len = length
                 best_start = current_start
-                best_end = current_end
+                best_end = last_good_idx
 
         if best_len == 0:
             return -1, -1

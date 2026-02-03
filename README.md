@@ -9,11 +9,12 @@ Migrama is a monolithic Python package that provides specialized tools for proce
 1. **migrama.pattern**: Pattern detection and annotation for micropatterned microscopy images
 2. **migrama.analyze**: Cell counting and analysis with segmentation
 3. **migrama.extract**: Extract cropped sequences based on cell count criteria
-4. **migrama.convert**: Convert raw TIFF folders into HDF5 for downstream analysis
+4. **migrama.convert**: Convert raw TIFF folders into Zarr for downstream analysis
 5. **migrama.graph**: Boundary and junction visualization from extracted segmentation masks
 6. **migrama.tension**: Integration with TensionMap for stress tensor inference
 7. **migrama.viewer**: Interactive visualization and frame selection for microscopy data
-8. **migrama.core**: Shared utilities and interfaces used across all modules
+8. **migrama.utils**: Plotting utilities for visualization
+9. **migrama.core**: Shared utilities and interfaces used across all modules
 
 ## Features
 
@@ -23,7 +24,7 @@ Migrama is a monolithic Python package that provides specialized tools for proce
 - **Tension Inference**: Calculate cellular stress tensors using VMSI (migrama.tension)
 - **Interactive Visualization**: User-friendly interface for data exploration (migrama.viewer)
 - **Data Export**: Multiple output formats for downstream analysis
-- **Data Conversion**: Convert TIFF stacks into analysis-ready HDF5 (migrama.convert)
+- **Data Conversion**: Convert TIFF stacks into analysis-ready Zarr (migrama.convert)
 
 ## Installation
 
@@ -82,12 +83,12 @@ This will show all available subcommands:
 
 - `migrama average` - Average time-lapse frames for pattern detection
 - `migrama pattern` - Pattern detection and annotation
-- `migrama analyze` - Cell counting and analysis  
-- `migrama extract` - Extract cropped sequences
-- `migrama convert` - Convert TIFF folders to HDF5
+- `migrama analyze` - Cell counting and analysis
+- `migrama extract` - Extract cropped sequences with cell-first tracking
+- `migrama convert` - Convert TIFF folders to Zarr
 - `migrama graph` - Boundary and junction visualization
 - `migrama tension` - Tension map analysis
-- `migrama info` - Inspect H5 file structure or plot a dataset slice
+- `migrama info` - Inspect Zarr store structure or plot a dataset slice
 - `migrama viewer` - Interactive viewer
 
 ## Documentation
@@ -124,6 +125,7 @@ migrama pattern \
   --plot ./pattern_plots/
 ```
 
+- Supports `.nd2` and `.tif`/`.tiff` files (auto-detected)
 - `--fovs` is required: use `"all"` or ranges like `"0,2-5,8"`
 - `--plot` generates bbox overlay visualizations (optional)
 - Output CSV has columns: `cell,fov,x,y,w,h`
@@ -140,6 +142,7 @@ migrama analyze \
   --n-cells 4
 ```
 
+- Supports `.nd2` and `.tif`/`.tiff` files (auto-detected)
 - `--n-cells` is required: target number of cells per pattern
 - `--cache` stores segmentation masks for the extract step
 - Segments using all channels (Cellpose all-channel mode)
@@ -157,6 +160,7 @@ migrama extract \
   --min-frames 20
 ```
 
+- Supports `.nd2` and `.tif`/`.tiff` files (auto-detected)
 - Cell-first workflow: track cells → derive nuclei via Otsu threshold
 - `--cache` loads pre-computed masks (optional, re-segments without it)
 - Output contains `cell_masks` (tracked) and `nuclei_masks` (derived)
@@ -186,7 +190,9 @@ migrama viewer
 migrama convert \
   --input /path/to/tiff_folder \
   --output ./converted.zarr \
-  --nc 0
+  --nc 0 \
+  --cell-channels 1,2 \
+  --merge-method add
 ```
 
 ## Project Structure
@@ -214,7 +220,7 @@ migrama/
 │       │   └── __init__.py
 │       ├── extract/     # Data extraction module
 │       │   └── __init__.py
-│       ├── convert/     # TIFF-to-H5 conversion
+│       ├── convert/     # TIFF-to-Zarr conversion
 │       │   └── __init__.py
 │       ├── graph/       # Boundary and junction visualization
 │       │   └── __init__.py
@@ -222,6 +228,8 @@ migrama/
 │       │   ├── __init__.py
 │       │   ├── cli.py   # Tension CLI
 │       │   └── integration.py
+│       ├── utils/       # Plotting utilities
+│       │   └── __init__.py
 │       └── viewer/      # Interactive data viewer
 │           ├── __init__.py
 │           └── ui/      # User interface components
@@ -278,8 +286,9 @@ migrama/
 
 ### Running Tests
 
-There are currently no tests in this repository. When tests are added, they will
-live in `tests/` and can be run with `python -m pytest tests/ -v`.
+```bash
+uv run pytest tests/ -v
+```
 
 ### Code Style
 

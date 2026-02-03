@@ -1,7 +1,7 @@
 """End-to-end tests for extract functionality.
 
 These tests run the full workflow: pattern detection -> analyze -> extract,
-producing OME-Zarr files and visualization plots for manual inspection.
+producing Zarr files and visualization plots for manual inspection.
 """
 
 import logging
@@ -20,7 +20,6 @@ from migrama.core.pattern import PatternDetector
 from migrama.core.pattern.source import Nd2PatternFovSource
 from migrama.extract import Extractor
 from tests.data import FOURCELL_20250812
-
 
 # Output directory for test results (gitignored)
 RESULTS_DIR = Path(__file__).parent / "_results"

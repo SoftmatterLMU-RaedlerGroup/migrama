@@ -16,7 +16,6 @@ from migrama.core.pattern import PatternDetector
 from migrama.core.pattern.source import Nd2PatternFovSource
 from tests.data import FOURCELL_20250812
 
-
 # Output directory for visual verification
 # Structure: tests/_plots/{command_name}/{dataset_name}/
 PLOTS_DIR = Path(__file__).parent / "_plots"

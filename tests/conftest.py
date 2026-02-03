@@ -1,7 +1,8 @@
 """Pytest configuration and fixtures for migrama tests."""
 
-import pytest
 from pathlib import Path
+
+import pytest
 
 from tests.data import FOURCELL_20250812
 
