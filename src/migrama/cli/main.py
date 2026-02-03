@@ -154,7 +154,7 @@ def average(
     cell_channel: int = typer.Option(0, "--cc", help="Channel index for cell bodies (phase contrast)"),
     t0: int | None = typer.Option(None, "--t0", help="Start frame index (inclusive, supports negative)"),
     t1: int | None = typer.Option(None, "--t1", help="End frame index (exclusive, supports negative)"),
-    output_dir: str = typer.Option(".", "--output-dir", help="Output directory for averaged TIFFs"),
+    output_dir: str = typer.Option(".", "--output", "-o", help="Output directory for averaged TIFFs"),
     debug: bool = typer.Option(False, "--debug"),
 ):
     """Average phase contrast time-lapse frames to generate pattern images when no dedicated patterns.nd2 was recorded."""

@@ -10,20 +10,44 @@ cd migrama
 uv sync
 ```
 
-## Commands
+## Pipeline Commands
+
+The main analysis pipeline runs in four stages:
 
 ```bash
-uv run migrama --help          # Show all commands
-uv run migrama pattern --help  # Detect micropatterns, save bounding boxes to CSV
-uv run migrama average --help  # Average time-lapse frames for pattern detection
-uv run migrama analyze --help  # Analyze cell counts, find valid frame ranges
-uv run migrama extract --help  # Extract sequences with cell-first tracking
-uv run migrama save --help     # Export Zarr sequences to TIFF files
-uv run migrama convert --help  # Convert TIFF folders to Zarr
-uv run migrama graph --help    # Visualize cell boundaries from extracted data
-uv run migrama tension --help  # Run TensionMap VMSI analysis
-uv run migrama info --help     # Inspect Zarr store structure
-uv run migrama viewer          # Launch interactive viewer
+# 1. Detect micropatterns and save bounding boxes
+uv run migrama pattern -p patterns.nd2 --fovs "all" -o patterns.csv
+
+# 2. Analyze cell counts and find valid frame ranges
+uv run migrama analyze -c cells.nd2 --csv patterns.csv --cache cache.zarr -o analysis.csv --n-cells 4
+
+# 3. Extract sequences with cell-first tracking
+uv run migrama extract -c cells.nd2 --csv analysis.csv --cache cache.zarr -o extracted.zarr
+
+# 4. Export Zarr sequences to TIFF files
+uv run migrama save --zarr extracted.zarr --output ./tiffs/
+
+# 5. Launch interactive viewer
+uv run migrama viewer
+```
+
+## Utility Commands
+
+```bash
+# Visualize cell boundaries from extracted data
+uv run migrama graph -i extracted.zarr --fov 0 --pattern 0 -o ./output --plot
+
+# Average time-lapse frames (useful for noisy pattern images)
+uv run migrama average -c cells.nd2 -o ./averaged
+
+# Convert TIFF folder to Zarr format
+uv run migrama convert -i tiff_folder/ -o converted.zarr --nc 0 --cell-channels 1,2
+
+# Inspect Zarr store structure
+uv run migrama info -i extracted.zarr
+
+# Run TensionMap VMSI analysis
+uv run migrama tension --mask mask.npy
 ```
 
 ## Example
